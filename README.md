@@ -75,4 +75,4 @@ The prefix contains the delay in milliseconds that have to past before sending t
 The `http-mock` in proxy mode automatically makes correct format for such files.
 
 ## important
-It is not necessary to restart `http-mock` if You changed the file with response, but if You changed the configuration then thr restart is required. 
+It is not necessary to restart `http-mock` if You changed the file with response, but if You changed the configuration then the restart is required. 

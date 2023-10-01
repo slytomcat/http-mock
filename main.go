@@ -37,7 +37,8 @@ type cfgValue struct {
 }
 
 const (
-	delaySize = 25
+	delaySize     = 25
+	flushInterval = 10 * time.Millisecond
 )
 
 var (
@@ -101,7 +102,7 @@ func readConfig(path string) error {
 	return nil
 }
 
-func root(cmd *cobra.Command, args []string) {
+func root(_ *cobra.Command, _ []string) {
 	if printVersion {
 		fmt.Printf("http-mock v. %s\n", version)
 		os.Exit(0)
@@ -113,6 +114,10 @@ func root(cmd *cobra.Command, args []string) {
 			forwardHost = hosts[1]
 		} else {
 			fmt.Printf("Error: incorrect URL: %s\n", forwardURL)
+			os.Exit(1)
+		}
+		if err := os.MkdirAll(dataPath, 01775); err != nil {
+			fmt.Printf("Error: creation data folder error: %s\n", err)
 			os.Exit(1)
 		}
 		mux.HandleFunc("/", proxyHandler)
@@ -144,7 +149,8 @@ func root(cmd *cobra.Command, args []string) {
 		fmt.Printf("Shutdown error:%v", err)
 	}
 	fmt.Println("Shutdown finished.")
-	if len(cfg) > 0 {
+	if len(cfg) > 0 { // when cfg is not empty it means that the service worked in proxy mode
+		// store the config cache into file
 		data, _ := json.MarshalIndent(cfg, "", "    ")
 		if err := os.WriteFile(fmt.Sprintf("%s/config.json", dataPath), data, 0644); err != nil {
 			fmt.Printf("Configuration writing error:%v", err)
@@ -152,13 +158,17 @@ func root(cmd *cobra.Command, args []string) {
 	}
 }
 
+// handle requests by forwarding it to the original service and replaying and saving the response data.
+// It also creates the configuration that can be used in mock mode
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
+	// make the new request to forward the original one
 	request, err := http.NewRequest(r.Method, forwardURL+url, r.Body)
 	request.Close = r.Close
 	for k, v := range r.Header {
 		request.Header.Add(k, strings.Join(v, " "))
 	}
+	// make forwarding request
 	resp, err := http.DefaultClient.Do(request)
 	if err != nil {
 		fmt.Printf("ERROR: making the forward request error: %s\n", err)
@@ -175,9 +185,10 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		headers["Connection"] = "close"
 	}
 	if len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
-		headers["Transfer-Encoding"] = "chunked"
+		// streamed response
 		tick := time.Now()
-		scaner := bufio.NewScanner(resp.Body)
+		headers["Transfer-Encoding"] = "chunked"
+		scanner := bufio.NewScanner(resp.Body)
 		file, err := os.Create(fileName)
 		if err != nil {
 			fmt.Printf("ERROR: creation data file error: %s", err)
@@ -186,43 +197,50 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		defer file.Close()
 		sendHeaders(w, headers)
-		defer startFlusher(w)()
-		for scaner.Scan() {
-			delay := time.Since(tick)
-			tick = time.Now()
-			chunk := append(scaner.Bytes(), []byte("\n")...)
-			go writeChunc(file, chunk, delay)
+		w.WriteHeader(resp.StatusCode)
+		defer startFlusher(w)() // start periodically flushing the response buffer
+		for scanner.Scan() {
+			now := time.Now()
+			chunk := append(scanner.Bytes(), '\n')
+			go writeChunkToFile(file, chunk, now.Sub(tick)) // write data to file in separate routine
+			tick = now
+			// replay chunk to requester, it will be flushed by flusher
 			if _, err := w.Write(chunk); err != nil {
 				fmt.Printf("ERROR: reading response body error: %s", err)
 			}
 		}
-		go storeConfig(fileName, headers, url, resp.StatusCode, true)
-	} else {
+		go storeConfig(fileName, headers, url, resp.StatusCode, true) // store config value in separate routine
+	} else { // conventional response
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Printf("ERROR: reading response body ")
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		go storeData(fileName, data, headers, url, resp.StatusCode)
+		go storeData(fileName, data, headers, url, resp.StatusCode) // write data to file and store config value in separate routine
+		// replay response to the requestor
 		sendHeaders(w, headers)
 		w.WriteHeader(resp.StatusCode)
 		w.Write(data)
 	}
+
 }
 
+// write headers data to ResponseWriter header cache
 func sendHeaders(w http.ResponseWriter, headers map[string]string) {
 	for k, v := range headers {
 		w.Header().Add(k, v)
 	}
 }
 
-func writeChunc(file *os.File, chunk []byte, delay time.Duration) {
+// write chunk in to file as data line with delay and chunk data
+func writeChunkToFile(file *os.File, chunk []byte, delay time.Duration) {
 	delayStr := strconv.FormatInt(delay.Milliseconds(), 10)
 	spacer := strings.Repeat(" ", delaySize-len(delayStr))
 	file.Write(append([]byte(spacer+delayStr+"|"), string(chunk)...))
 }
 
+// store data to the file and make new record in config cache
 func storeData(fileName string, data []byte, headers map[string]string, url string, code int) {
 	err := os.WriteFile(fileName, data, 0644)
 	if err != nil {
@@ -231,6 +249,7 @@ func storeData(fileName string, data []byte, headers map[string]string, url stri
 	storeConfig(fileName, headers, url, code, false)
 }
 
+// make new item into the config cache
 func storeConfig(fileName string, headers map[string]string, url string, code int, stream bool) {
 	newCfg := cfgValue{
 		Re:      fmt.Sprintf("^%s$", url),
@@ -244,6 +263,7 @@ func storeConfig(fileName string, headers map[string]string, url string, code in
 	cfg = append(cfg, newCfg)
 }
 
+// handle requests by replaying the responses from files according to the configuration
 func mockHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
 	found := false
@@ -252,7 +272,7 @@ func mockHandler(w http.ResponseWriter, r *http.Request) {
 		if c.re.MatchString(url) {
 			found = true
 			sendHeaders(w, c.headers)
-			if c.stream {
+			if c.stream { // streamed response
 				defer startFlusher(w)()
 				file, err := os.Open(c.path)
 				if err != nil {
@@ -275,7 +295,7 @@ func mockHandler(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 				}
-			} else {
+			} else { // ordinal response
 				data, err := os.ReadFile(c.path)
 				if err != nil {
 					readFileError(c.path, err, w, url)
@@ -290,36 +310,40 @@ func mockHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if !found {
+	if !found { // no config record found for the received request
 		w.WriteHeader(http.StatusNotFound)
 	}
 }
 
+// handle the reading file error
 func readFileError(path string, err error, w http.ResponseWriter, url string) {
 	fmt.Printf("Error: reading file '%s' error: %v while hadlinh the %s\n", path, err, url)
 	w.WriteHeader(http.StatusInternalServerError)
 }
 
+// handle the writing error
 func writeResponseError(err error, w http.ResponseWriter, url string) {
 	fmt.Printf("Error: sending response error: %v while hadlinh the %s\n", err, url)
 	w.WriteHeader(http.StatusInternalServerError)
 
 }
 
+// asynchronous counter
 type asyncCounter struct {
 	c uint64
 }
 
+// threads-safe function get next counter value
 func (c *asyncCounter) Next() uint64 {
 	return atomic.AddUint64(&c.c, 1)
 }
 
+// start periodically flushing the response buffer in separate routine and return stopping function
 func startFlusher(w http.ResponseWriter) func() {
-	flush := w.(http.Flusher).Flush
 	ctx, cancel := context.WithCancel(context.Background())
 	go func(ctx context.Context, flush func()) {
 		flush()
-		ticker := time.NewTicker(time.Millisecond)
+		ticker := time.NewTicker(flushInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -329,6 +353,6 @@ func startFlusher(w http.ResponseWriter) func() {
 				return
 			}
 		}
-	}(ctx, flush)
+	}(ctx, w.(http.Flusher).Flush)
 	return cancel
 }

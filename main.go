@@ -42,8 +42,8 @@ const (
 
 var (
 	version      = "local build"
-	forvardURL   string
-	forvardHost  string
+	forwardURL   string
+	forwardHost  string
 	config       string
 	host         string
 	port         int
@@ -64,11 +64,11 @@ func main() {
 		Example: "http-mock -c config.json -p 8000\nor\nhttp-mock -f http://examle.com",
 	}
 	rootCmd.Flags().StringVarP(&host, "host", "s", "localhost", "host to start service")
-	rootCmd.Flags().IntVarP(&port, "port", "p", 8080, "port to strat service")
-	rootCmd.Flags().StringVarP(&forvardURL, "forward", "f", "", "URL for forwarding requests")
+	rootCmd.Flags().IntVarP(&port, "port", "p", 8080, "port to start service")
+	rootCmd.Flags().StringVarP(&forwardURL, "forward", "f", "", "URL for forwarding requests")
 	rootCmd.Flags().StringVarP(&config, "config", "c", "", "path for configuration file")
 	rootCmd.Flags().BoolVarP(&printVersion, "version", "v", false, "print version and exit")
-	rootCmd.Flags().StringVarP(&dataPath, "data-path", "d", ".", "path saving catched data and config file")
+	rootCmd.Flags().StringVarP(&dataPath, "data-path", "d", ".", "path for saving cached data and config file")
 	rootCmd.Execute()
 }
 
@@ -108,15 +108,15 @@ func root(cmd *cobra.Command, args []string) {
 	}
 	mux := http.NewServeMux()
 	switch {
-	case forvardURL != "":
-		if hosts := reURL.FindStringSubmatch(forvardURL); len(hosts) == 2 {
-			forvardHost = hosts[1]
+	case forwardURL != "":
+		if hosts := reURL.FindStringSubmatch(forwardURL); len(hosts) == 2 {
+			forwardHost = hosts[1]
 		} else {
-			fmt.Printf("Error: incorrect URL: %s\n", forvardURL)
+			fmt.Printf("Error: incorrect URL: %s\n", forwardURL)
 			os.Exit(1)
 		}
 		mux.HandleFunc("/", proxyHandler)
-		fmt.Printf("Starting proxy sevice for %s on %s:%d\n", forvardURL, host, port)
+		fmt.Printf("Starting proxy server for %s on %s:%d\n", forwardURL, host, port)
 	case config != "":
 		if err := readConfig(config); err != nil {
 			fmt.Printf("Error: config loading error: %s\n", err)
@@ -154,7 +154,7 @@ func root(cmd *cobra.Command, args []string) {
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
-	request, err := http.NewRequest(r.Method, forvardURL+url, r.Body)
+	request, err := http.NewRequest(r.Method, forwardURL+url, r.Body)
 	request.Close = r.Close
 	for k, v := range r.Header {
 		request.Header.Add(k, strings.Join(v, " "))
@@ -166,7 +166,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	fileName := fmt.Sprintf("%s/%s_response_%d.raw", dataPath, forvardHost, cnt.Next())
+	fileName := fmt.Sprintf("%s/%s_response_%d.raw", dataPath, forwardHost, cnt.Next())
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		headers[k] = strings.Join(v, " ")
@@ -260,9 +260,9 @@ func mockHandler(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				defer file.Close()
-				scaner := bufio.NewScanner(file)
-				for scaner.Scan() {
-					line := scaner.Text()
+				scanner := bufio.NewScanner(file)
+				for scanner.Scan() {
+					line := scanner.Text()
 					delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
 					if err != nil {
 						readFileError(c.path, err, w, url)

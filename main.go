@@ -45,14 +45,13 @@ const (
 var (
 	version      = "local build"
 	forwardURL   string
-	forwardHost  string
+	dataDirName  string
 	config       string
 	host         string
 	port         int
 	printVersion bool
-	reURL        = regexp.MustCompile(`https?://([^/]+).*`)
+	reURL        = regexp.MustCompile(`https?://(.*)$`)
 	filters      []filter
-	dataPath     string
 	cnt          asyncCounter
 	cfg          []cfgValue
 	cfgLock      sync.Mutex
@@ -71,7 +70,6 @@ func main() {
 	rootCmd.Flags().StringVarP(&forwardURL, "forward", "f", "", "URL for forwarding requests")
 	rootCmd.Flags().StringVarP(&config, "config", "c", "", "path for configuration file")
 	rootCmd.Flags().BoolVarP(&printVersion, "version", "v", false, "print version and exit")
-	rootCmd.Flags().StringVarP(&dataPath, "data-path", "d", ".", "path for saving cached data and config file")
 	rootCmd.Execute()
 }
 
@@ -113,20 +111,20 @@ func root(_ *cobra.Command, _ []string) {
 	switch {
 	case forwardURL != "":
 		if hosts := reURL.FindStringSubmatch(forwardURL); len(hosts) == 2 {
-			forwardHost = hosts[1]
+			dataDirName = strings.ReplaceAll(hosts[1], "/", "_")
 		} else {
 			logger.Fatalf("incorrect URL: %s\n", forwardURL)
 		}
-		if err := os.MkdirAll(dataPath, 01775); err != nil {
+		if err := os.MkdirAll(dataDirName, 01775); err != nil {
 			logger.Fatalf("creation data folder error: %s\n", err)
 		}
-		mux.HandleFunc("/", proxyHandler)
+		mux.HandleFunc("/", ProxyHandler)
 		logger.Printf("Starting proxy server for %s on %s:%d\n", forwardURL, host, port)
 	case config != "":
 		if err := readConfig(config); err != nil {
 			logger.Fatalf("config loading error: %s\n", err)
 		}
-		mux.HandleFunc("/", mockHandler)
+		mux.HandleFunc("/", MockHandler)
 		logger.Printf("Starting MOCK server on %s:%d\n", host, port)
 	default:
 		logger.Fatalln("ether -c or -f option have to be provided")
@@ -140,7 +138,7 @@ func root(_ *cobra.Command, _ []string) {
 	sig := make(chan (os.Signal), 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	s := <-sig // wait for a signal
-	logger.Printf("\n%s received.\nStarting shutdown...", s.String())
+	logger.Printf("%s received.\nStarting shutdown...", s.String())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	err := server.Shutdown(ctx)
@@ -151,15 +149,15 @@ func root(_ *cobra.Command, _ []string) {
 	if len(cfg) > 0 { // when cfg is not empty it means that the service worked in proxy mode
 		// store the config cache into file
 		data, _ := json.MarshalIndent(cfg, "", "    ")
-		if err := os.WriteFile(fmt.Sprintf("%s/config.json", dataPath), data, 0644); err != nil {
+		if err := os.WriteFile(fmt.Sprintf("%s/config.json", dataDirName), data, 0644); err != nil {
 			logger.Printf("Configuration writing error:%v", err)
 		}
 	}
 }
 
-// handle requests by forwarding it to the original service and replaying and saving the response data.
+// ProxyHandler handles requests by forwarding it to the original service and replaying and saving the response data.
 // It also creates the configuration that can be used in mock mode
-func proxyHandler(w http.ResponseWriter, r *http.Request) {
+func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
 	// make the new request to forward the original one
 	request, err := http.NewRequest(r.Method, forwardURL+url, r.Body)
@@ -170,12 +168,12 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// make forwarding request
 	resp, err := http.DefaultClient.Do(request)
 	if err != nil {
-		logger.Printf("ERROR: making the forward request error: %s\n", err)
+		logger.Printf("ProxyHandler: making the forward request error: %s\n", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
-	fileName := fmt.Sprintf("%s/%s_response_%d.raw", dataPath, forwardHost, cnt.Next())
+	fileName := fmt.Sprintf("%s/%s_response_%d.raw", dataDirName, strings.ReplaceAll(r.URL.Path, "/", "_"), cnt.Next())
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		headers[k] = strings.Join(v, " ")
@@ -190,7 +188,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		scanner := bufio.NewScanner(resp.Body)
 		file, err := os.Create(fileName)
 		if err != nil {
-			logger.Printf("ERROR: creation data file error: %s", err)
+			logger.Printf("ProxyHandler: creation data file error: %s", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -204,22 +202,21 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 			now := time.Now()
 			chunk := append(scanner.Bytes(), '\n')
 			if _, err = fileWriter.Write(formatChink(now.Sub(tick), chunk)); err != nil {
-				logger.Printf("ERROR: writing response to file error: %s", err)
+				logger.Printf("ProxyHandler: writing response to file error: %s", err)
 				break
 			}
 			tick = now
 			// replay chunk to requester, it will be flushed by flusher
 			if _, err := responseWriter.Write(chunk); err != nil {
-				logger.Printf("ERROR: writing response to  error: %s", err)
+				logger.Printf("ProxyHandler: writing response to responseWriter error: %s", err)
 				break
 			}
-			log.Printf("chunk handled: %s", chunk)
 		}
 		go storeConfig(fileName, headers, url, resp.StatusCode, true) // store config value in separate routine
 	} else { // conventional response
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
-			logger.Printf("ERROR: reading response body ")
+			logger.Printf("ProxyHandler: reading response body ")
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -250,34 +247,44 @@ func formatChink(delay time.Duration, data []byte) []byte {
 type CachedRecorder struct {
 	wc     io.WriteCloser
 	input  chan []byte
-	closed int64
+	closed bool
+	lock   sync.Mutex
 }
 
 // NewCachedRecorder creates io.WriteCloser that pass data via channel buffer.
 func NewCachedRecorder(in io.WriteCloser) io.WriteCloser {
 	input := make(chan []byte, 1024)
+	c := &CachedRecorder{
+		wc:    in,
+		input: input,
+	}
 	go func() {
 		for data := range input {
-			_, err := in.Write(data)
+			_, err := c.wc.Write(data)
 			if err != nil {
-				panic(err)
+				logger.Printf("CachedRecorder: writing to underlying WC error: %s", err)
+				c.lock.Lock()
+				c.closed = true
+				close(input)
+				c.lock.Unlock()
+				for range input {
+				} // drain
+				break
 			}
 		}
 		err := in.Close()
 		if err != nil {
-			panic(err)
+			logger.Printf("CachedRecorder: closing underlying WC error: %s", err)
 		}
 	}()
-	return &CachedRecorder{
-		wc:     in,
-		input:  input,
-		closed: 0,
-	}
+	return c
 }
 
 // Write chunk in to file as data line with delay and chunk data
 func (c *CachedRecorder) Write(data []byte) (int, error) {
-	if atomic.LoadInt64(&c.closed) != 0 {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if c.closed {
 		return 0, fmt.Errorf("writing to closed CachedWriter")
 	}
 	c.input <- data
@@ -286,9 +293,12 @@ func (c *CachedRecorder) Write(data []byte) (int, error) {
 
 // Close underlying file
 func (c *CachedRecorder) Close() error {
-	if !atomic.CompareAndSwapInt64(&c.closed, 0, 1) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if c.closed {
 		return fmt.Errorf("closing already closed CacheWriter")
 	}
+	c.closed = true
 	close(c.input)
 	return nil
 }
@@ -337,8 +347,8 @@ func storeConfig(fileName string, headers map[string]string, url string, code in
 	cfg = append(cfg, newCfg)
 }
 
-// handle requests by replaying the responses from files according to the configuration
-func mockHandler(w http.ResponseWriter, r *http.Request) {
+// MockHandler handles requests by replaying the responses from files according to the configuration
+func MockHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
 	found := false
 	defer r.Body.Close()

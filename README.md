@@ -10,18 +10,18 @@ In `proxy` mode each request creates:
 - new file file response data
 - new item in configuration
 
-A file is created in folder that corresponds to the forwarding URL. For example: the requests for forwarding URL: `http://www.example.com/test` will be stored in subfolder `www.example.com_test`.
+A file is created in subfolder (of current path from witch the service was started) that corresponds to the forwarding URL. For example: the requests for forwarding URL: `http://www.example.com/test` will be stored in subfolder `www.example.com_test`.
 The response files will be saved in the subfolder and will contain the rest part of request URL in its name. For example: request to `http://localhost:8080/path/to/end-point?id=0` will be saved to file `_path_to_end-point_response_<n>.raw` where `n` is unique number. Config file is stored with name `config.json` in the same subfolder. It is created when service is stopped.
 
-As each request is handled individually the several requests to the same end-point even with the same parameters will be saved in separate files and the config will have several similar records. The requests handled in the almost same time maybe written in different order. But matching of the incoming request in `mock` mode is started from the first config record uup to the end. That why it is highly recommended to review and change the config file created in `proxy` mode before using it in `mock` mode.    
+As each request is handled individually the several requests to the same end-point even with the same parameters will be saved in separate files and the config will have several similar records. The requests handled in the almost same time maybe written in different order. But matching of the incoming request in `mock` mode is started from the first config record up to the end. That why it is highly recommended to review and change the config file created in `proxy` mode before using it in `mock` mode.    
 
 Responses' files may be stored in one of 2 formats:
 - just raw body of response
-- special format for chunked responses (with the response with `Transfer-Encoding: chunked` in the response header).
+- special format for chunked responses (with the `Transfer-Encoding: chunked` in the response header).
 
-The format of chunked response file is described below. 
+The format of chunked response file is described in the section [below](#chunked-response-file-format). 
 
-It important to understand that all responses in HTTP/2 protocol version are treated as chunked. Thous even one chunk response in HTTP/2 protocol will be written into file with chunked data format. This is one more reason to review the generated config and correct it together with the files. The chunked file can be converted into conventional one by following bash command:
+It's important to understand that responses in HTTP/2 protocol version are always treated as chunked. Thous even one chunk response in HTTP/2 protocol will be written into file with chunked data format. This is one more reason to review the generated config and correct it together with the files. The chunked file can be converted into conventional one by following bash command:
 ```
 cut -c 27- chunked_response_3.raw > conventional_response_3.raw
 ```
@@ -109,3 +109,5 @@ The `http-mock` in proxy mode automatically makes correct format for such files 
 
 ## important
 It is not necessary to restart `http-mock` if You changed the file with response, but if You changed the configuration then the restart is required. 
+
+[delow]: #chunked-response-file-format

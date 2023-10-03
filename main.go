@@ -165,7 +165,8 @@ func root(cmd *cobra.Command, _ []string) {
 // It also creates the configuration that can be used in mock mode
 func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
-	logger.Printf("%s %s %s from %s (proxy mode)", r.Proto, r.Method, url, r.RemoteAddr)
+	fileName := path.Join(dataDirName, fmt.Sprintf("%s_response_%d.raw", strings.ReplaceAll(r.URL.Path, "/", "_"), cnt.Next()))
+	logger.Printf("%s %s %s from %s in proxy mode, response file: %s ", r.Proto, r.Method, url, r.RemoteAddr, fileName)
 	// make the new request to forward the original one
 	request, err := http.NewRequest(r.Method, forwardURL+url, r.Body)
 	request.Close = r.Close
@@ -180,7 +181,6 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	fileName := path.Join(dataDirName, fmt.Sprintf("%s_response_%d.raw", strings.ReplaceAll(r.URL.Path, "/", "_"), cnt.Next()))
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		headers[k] = strings.Join(v, " ")
@@ -199,9 +199,9 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		fileWriter := NewCachedRecorder(file, "file writer")
+		fileWriter := NewCachedRecorder(file, "response file writer")
 		defer fileWriter.Close()
-		responseWriter := NewCachedRecorder(NewWriteCloserFromWriter(w), "reaspnse writer")
+		responseWriter := NewCachedRecorder(NewWriteCloserFromWriter(w), "client response writer")
 		sendHeaders(w.Header(), headers)
 		w.WriteHeader(resp.StatusCode)
 		defer startFlusher(w)() // start periodically flushing the response buffer
@@ -356,12 +356,11 @@ func storeConfig(fileName string, headers map[string]string, url string, code in
 // MockHandler handles requests by replaying the responses from files according to the configuration
 func MockHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
-	logger.Printf("%s %s %s from %s (mock mode)", r.Proto, r.Method, url, r.RemoteAddr)
 	found := false
-	defer r.Body.Close()
 	for _, c := range filters {
 		if c.re.MatchString(url) {
 			found = true
+			logger.Printf("%s %s %s from %s in mock mode, response file: %s", r.Proto, r.Method, url, r.RemoteAddr, c.path)
 			sendHeaders(w.Header(), c.headers)
 			if c.stream { // streamed response
 				defer startFlusher(w)()
@@ -401,7 +400,8 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if !found { // no config record found for the received request
+	if !found {
+		logger.Printf("%s %s %s from %s in mock mode, no matching records in config", r.Proto, r.Method, url, r.RemoteAddr)
 		w.WriteHeader(http.StatusNotFound)
 	}
 }

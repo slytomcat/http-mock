@@ -4,7 +4,7 @@ MOCK Service for http services.
 
 It can work in two modes:
 
-- `proxy`: forward incoming requests to specified external service, return and store responses and create configuration for MOCk mode usage.
+- `proxy`: forward incoming requests to specified external service, return and store responses and create configuration for `mock` mode usage.
 - `mock`: handle incoming requests from files according to the configuration file.
 
 In `proxy` mode each request creates:
@@ -12,7 +12,7 @@ In `proxy` mode each request creates:
 - new item in configuration
 
 A file is created in subfolder (of current path from witch the service was started) that corresponds to the forwarding URL. For example: the requests for forwarding URL: `http://www.example.com/test` will be stored in subfolder `www.example.com_test`.
-The response files will be saved in the subfolder and will contain the rest part of request URL in its name. For example: request to `http://localhost:8080/path/to/end-point?id=0` will be saved to file `_path_to_end-point_response_<n>.raw` where `n` is unique number. Config file is stored with name `config.json` in the same subfolder. It is created when service is stopped.
+The files with response data will be saved in the subfolder and will contain the rest part of request URL in its name. For example: response of request to `http://localhost:8080/path/to/end-point?id=0` will be saved to file `_path_to_end-point_response_<n>.raw` where `n` is unique number. Config file is stored with name `config.json` in the same subfolder. It is created when service is stopped.
 
 As each request is handled individually the several requests to the same end-point even with the same parameters will be saved in separate files and the config will have several similar records. The requests handled in the almost same time maybe written in different order. But matching of the incoming request in `mock` mode is started from the first config record up to the end. That why it is highly recommended to review and change the config file created in `proxy` mode before using it in `mock` mode.    
 
@@ -39,7 +39,7 @@ or clone/download repository source and build it by
 ```
 ./build.sh
 ```
-executed from the repo folder.
+executed from the repo folder. You need Golang v.1.20 or higher to build the binary. Also the `build.sh` uses `upx` utility to compact the binary. 
 
 ## use in proxy mode
 
@@ -114,8 +114,8 @@ For responses in chunked mode the file have to be in special format. Example:
                      1000|data line #2
 ```
 Each line of file contains fixed length prefix (before symbol `|`) and the chunk data.
-The prefix contains the delay in milliseconds that have to past before sending the chunk.
-The `http-mock` in proxy mode automatically makes correct format for such files as well as correct config record for the making the response.
+The prefix conventional_response_3contains the delay in milliseconds that have to past before sending the chunk.
+The `http-mock` in `proxy`` mode automatically makes correct format for such files as well as correct config record for the making the response.
 
 ## important
-It is not necessary to restart `http-mock` if You changed the file with response, but if You changed the configuration then the restart is required.
+It is not necessary to restart `http-mock` working in `mock` mode if You changed the file with response, but if You changed the configuration then the restart is required.

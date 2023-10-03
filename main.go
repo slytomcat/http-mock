@@ -104,7 +104,7 @@ func readConfig(path string) error {
 
 func root(_ *cobra.Command, _ []string) {
 	if printVersion {
-		logger.Printf("http-mock v. %s\n", version)
+		fmt.Printf("http-mock v. %s\n", version)
 		os.Exit(0)
 	}
 	mux := http.NewServeMux()

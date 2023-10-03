@@ -1,3 +1,4 @@
+[![Go](https://github.com/slytomcat/http-mock/actions/workflows/go.yml/badge.svg)](https://github.com/slytomcat/http-mock/actions/workflows/go.yml)
 # http-mock
 MOCK Service for http services.
 
@@ -29,17 +30,25 @@ Also change the file name in the corresponding config record and remove the `"Tr
 
 When the response is in JSON format it is rather logical to change the response file extension `.raw` to `.json`. Don't forgot to change `path` in the config file.  
 
+## get
+```
+curl -sL https://github.com/slytomcat/http-mock/releases/latest/download/http-mock > http-mock
+chmod a+x http-mock
+```
+or clone/download repository source and build it by
+```
+./build.sh
+```
+executed from the repo folder.
 
-## proxy mode
+## use in proxy mode
 
-Simple usage
 ```
 http-mock -f "http://example.com" 
 ```
 
-## mock mode
+## use in mock mode
 
-Simple usage
 ```
 http-mock -c config.json
 ```
@@ -55,6 +64,7 @@ Flags:
   -p, --port int           port to start service (default 8080)
   -v, --version            print version and exit
 ```
+At least one of `-c`, `-f`, `-h` or `-v` have to be provided
 
 ## config
 
@@ -108,6 +118,4 @@ The prefix contains the delay in milliseconds that have to past before sending t
 The `http-mock` in proxy mode automatically makes correct format for such files as well as correct config record for the making the response.
 
 ## important
-It is not necessary to restart `http-mock` if You changed the file with response, but if You changed the configuration then the restart is required. 
-
-[delow]: #chunked-response-file-format
+It is not necessary to restart `http-mock` if You changed the file with response, but if You changed the configuration then the restart is required.

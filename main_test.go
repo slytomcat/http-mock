@@ -112,7 +112,7 @@ func TestMockWriter(t *testing.T) {
 
 func TestCachedRecorder(t *testing.T) {
 	mock := NewMockWriter()
-	wc := NewCachedRecorder(mock)
+	wc := NewCachedRecorder(mock, "")
 	wg := sync.WaitGroup{}
 	length := len(messages)
 	wg.Add(length)

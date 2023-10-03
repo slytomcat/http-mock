@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -102,7 +103,7 @@ func readConfig(path string) error {
 	return nil
 }
 
-func root(_ *cobra.Command, _ []string) {
+func root(cmd *cobra.Command, _ []string) {
 	if printVersion {
 		fmt.Printf("http-mock v. %s\n", version)
 		os.Exit(0)
@@ -113,28 +114,33 @@ func root(_ *cobra.Command, _ []string) {
 		if hosts := reURL.FindStringSubmatch(forwardURL); len(hosts) == 2 {
 			dataDirName = strings.ReplaceAll(hosts[1], "/", "_")
 		} else {
-			logger.Fatalf("incorrect URL: %s\n", forwardURL)
+			fmt.Printf("incorrect URL: %s\n", forwardURL)
+			os.Exit(1)
 		}
 		if err := os.MkdirAll(dataDirName, 01775); err != nil {
-			logger.Fatalf("creation data folder error: %s\n", err)
+			fmt.Printf("creation data folder '%s' error: %s\n", dataDirName, err)
+			os.Exit(1)
 		}
 		mux.HandleFunc("/", ProxyHandler)
 		logger.Printf("Starting proxy server for %s on %s:%d\n", forwardURL, host, port)
+		break
 	case config != "":
 		if err := readConfig(config); err != nil {
-			logger.Fatalf("config loading error: %s\n", err)
+			fmt.Printf("config loading error: %s\n", err)
+			os.Exit(1)
 		}
 		mux.HandleFunc("/", MockHandler)
 		logger.Printf("Starting MOCK server on %s:%d\n", host, port)
 	default:
-		logger.Fatalln("ether -c or -f option have to be provided")
+		fmt.Println("One of -c, -f, -h, or -v option have to be provided")
+		cmd.Usage()
 		os.Exit(1)
 	}
 	server := http.Server{
 		Addr:    fmt.Sprintf("%s:%d", host, port),
 		Handler: mux,
 	}
-	go func() { fmt.Println(server.ListenAndServe()) }()
+	go func() { log.Println(server.ListenAndServe()) }()
 	sig := make(chan (os.Signal), 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	s := <-sig // wait for a signal
@@ -159,6 +165,7 @@ func root(_ *cobra.Command, _ []string) {
 // It also creates the configuration that can be used in mock mode
 func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
+	logger.Printf("%s %s %s from %s (proxy mode)", r.Proto, r.Method, url, r.RemoteAddr)
 	// make the new request to forward the original one
 	request, err := http.NewRequest(r.Method, forwardURL+url, r.Body)
 	request.Close = r.Close
@@ -173,7 +180,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	fileName := fmt.Sprintf("%s/%s_response_%d.raw", dataDirName, strings.ReplaceAll(r.URL.Path, "/", "_"), cnt.Next())
+	fileName := path.Join(dataDirName, fmt.Sprintf("%s_response_%d.raw", strings.ReplaceAll(r.URL.Path, "/", "_"), cnt.Next()))
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		headers[k] = strings.Join(v, " ")
@@ -192,9 +199,9 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		fileWriter := NewCachedRecorder(file)
-		responseWriter := NewCachedRecorder(NewWriteCloserFromWriter(w))
+		fileWriter := NewCachedRecorder(file, "file writer")
 		defer fileWriter.Close()
+		responseWriter := NewCachedRecorder(NewWriteCloserFromWriter(w), "reaspnse writer")
 		sendHeaders(w.Header(), headers)
 		w.WriteHeader(resp.StatusCode)
 		defer startFlusher(w)() // start periodically flushing the response buffer
@@ -226,7 +233,6 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(resp.StatusCode)
 		w.Write(data)
 	}
-
 }
 
 // write headers data to ResponseWriter header cache
@@ -252,7 +258,7 @@ type CachedRecorder struct {
 }
 
 // NewCachedRecorder creates io.WriteCloser that pass data via channel buffer.
-func NewCachedRecorder(in io.WriteCloser) io.WriteCloser {
+func NewCachedRecorder(in io.WriteCloser, logPrefix string) io.WriteCloser {
 	input := make(chan []byte, 1024)
 	c := &CachedRecorder{
 		wc:    in,
@@ -262,7 +268,7 @@ func NewCachedRecorder(in io.WriteCloser) io.WriteCloser {
 		for data := range input {
 			_, err := c.wc.Write(data)
 			if err != nil {
-				logger.Printf("CachedRecorder: writing to underlying WC error: %s", err)
+				logger.Printf("%s: writing to underlying WC error: %s", logPrefix, err)
 				c.lock.Lock()
 				c.closed = true
 				close(input)
@@ -274,7 +280,7 @@ func NewCachedRecorder(in io.WriteCloser) io.WriteCloser {
 		}
 		err := in.Close()
 		if err != nil {
-			logger.Printf("CachedRecorder: closing underlying WC error: %s", err)
+			logger.Printf("%s: closing underlying WC error: %s", logPrefix, err)
 		}
 	}()
 	return c
@@ -327,7 +333,7 @@ func (w *WriteCloserFromWriter) Close() error {
 func storeData(fileName string, data []byte, headers map[string]string, url string, code int) {
 	err := os.WriteFile(fileName, data, 0644)
 	if err != nil {
-		logger.Printf("ERROR: writing '%s' error: %s", fileName, err)
+		logger.Printf("storeData: writing '%s' error: %s", fileName, err)
 		return
 	}
 	storeConfig(fileName, headers, url, code, false)
@@ -350,6 +356,7 @@ func storeConfig(fileName string, headers map[string]string, url string, code in
 // MockHandler handles requests by replaying the responses from files according to the configuration
 func MockHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
+	logger.Printf("%s %s %s from %s (mock mode)", r.Proto, r.Method, url, r.RemoteAddr)
 	found := false
 	defer r.Body.Close()
 	for _, c := range filters {
@@ -401,13 +408,13 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 
 // handle the reading file error
 func readFileError(path string, err error, w http.ResponseWriter, url string) {
-	logger.Printf("ERROR: reading file '%s' error: %v while handling the %s\n", path, err, url)
+	logger.Printf("MockHandler: reading file '%s' error: %v while handling the %s\n", path, err, url)
 	w.WriteHeader(http.StatusInternalServerError)
 }
 
 // handle the writing error
 func writeResponseError(err error, w http.ResponseWriter, url string) {
-	logger.Printf("ERROR: sending response error: %v while handling the %s\n", err, url)
+	logger.Printf("MockHandler: sending response error: %v while handling the %s\n", err, url)
 	w.WriteHeader(http.StatusInternalServerError)
 
 }

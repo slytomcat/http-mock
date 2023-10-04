@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
 	"net/http"
 	"os"
@@ -33,6 +32,8 @@ type MockWriter struct {
 	lock        sync.Mutex
 	flushCalled int64
 	header      http.Header
+	writeFunc   func([]byte) (int, error)
+	closeFunc   func() error
 }
 
 func NewMockWriter() *MockWriter {
@@ -43,6 +44,9 @@ func NewMockWriter() *MockWriter {
 }
 
 func (m *MockWriter) Write(data []byte) (int, error) {
+	if m.writeFunc != nil {
+		return m.writeFunc(data)
+	}
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	if m.closed {
@@ -53,6 +57,9 @@ func (m *MockWriter) Write(data []byte) (int, error) {
 }
 
 func (m *MockWriter) Close() error {
+	if m.closeFunc != nil {
+		return m.closeFunc()
+	}
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	if m.closed {
@@ -64,6 +71,11 @@ func (m *MockWriter) Close() error {
 }
 
 func (m *MockWriter) Flush() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	if m.closed {
+		panic("Flushing already closed mock")
+	}
 	atomic.AddInt64(&m.flushCalled, 1)
 }
 
@@ -110,25 +122,28 @@ func TestMockWriter(t *testing.T) {
 	}
 }
 
-func TestCachedRecorder(t *testing.T) {
+func TestCachedWritCloser(t *testing.T) {
 	mock := NewMockWriter()
-	wc := NewCachedRecorder(mock, "")
-	wg := sync.WaitGroup{}
+	flushInterval = 5 * time.Millisecond
+	wc := NewCachedWritCloser(mock, "", mock.Flush)
 	length := len(messages)
-	wg.Add(length)
+	// slow
 	for i := 0; i < length; i++ {
-		go func(i int, w io.WriteCloser) {
-			defer wg.Done()
-			time.Sleep(time.Duration(i) * 10 * time.Millisecond)
-			n, err := w.Write(messages[i])
-			assert.NoError(t, err, i)
-			assert.Equal(t, 2, n, i)
-		}(i, wc)
+		time.Sleep(flushInterval)
+		n, err := wc.Write(messages[i])
+		assert.NoError(t, err, i)
+		assert.Equal(t, 2, n, i)
 	}
-	wg.Wait()
+	// fast
+	for i := 0; i < length; i++ {
+		n, err := wc.Write(messages[i])
+		assert.NoError(t, err, i)
+		assert.Equal(t, 2, n, i)
+	}
 	time.Sleep(time.Millisecond)
-	require.Len(t, mock.Written, length)
+	require.Len(t, mock.Written, 2*length)
 	require.False(t, mock.Closed())
+	require.Equal(t, int64(10), atomic.LoadInt64(&mock.flushCalled))
 	err := wc.Close()
 	require.NoError(t, err)
 	require.False(t, mock.Closed())
@@ -136,12 +151,42 @@ func TestCachedRecorder(t *testing.T) {
 	require.Error(t, err)
 	require.Zero(t, n)
 	require.Error(t, wc.Close())
+	time.Sleep(time.Millisecond)
+	require.Equal(t, int64(11), atomic.LoadInt64(&mock.flushCalled))
 	i := 0
 	for d := range mock.Written {
-		assert.Equal(t, messages[i], d)
+		assert.Equal(t, messages[i%length], d)
 		i++
 	}
-	require.Equal(t, length, i)
+	require.Equal(t, 2*length, i)
+	require.True(t, mock.Closed())
+}
+
+func TestCachedWritCloserErrors(t *testing.T) {
+	tError := errors.New("test error")
+	mock := NewMockWriter()
+	wc := NewCachedWritCloser(mock, "", nil)
+	mock.closeFunc = func() error {
+		return tError
+	}
+	data := []byte("test data")
+	n, err := wc.Write(data)
+	require.NoError(t, err)
+	require.Equal(t, 9, n)
+	require.NoError(t, wc.Close())
+	time.Sleep(time.Millisecond)
+	require.Len(t, mock.Written, 1)
+	require.Equal(t, data, <-mock.Written)
+	require.False(t, mock.Closed())
+	mock = NewMockWriter()
+	wc = NewCachedWritCloser(mock, "", nil)
+	mock.writeFunc = func([]byte) (int, error) {
+		return 0, tError
+	}
+	n, err = wc.Write(data)
+	require.NoError(t, err)
+	require.Equal(t, 9, n)
+	time.Sleep(time.Millisecond)
 	require.True(t, mock.Closed())
 }
 
@@ -181,16 +226,6 @@ func TestAsyncCounter(t *testing.T) {
 	require.Len(t, m, length)
 	atomic.StoreUint64(&cnt.c, math.MaxUint64)
 	require.Zero(t, cnt.Next())
-}
-
-func TestStartFlusher(t *testing.T) {
-	wc := &MockWriter{}
-	start := time.Now()
-	stopper := startFlusher(wc)
-	defer stopper()
-	require.Eventually(t, func() bool { return atomic.LoadInt64(&wc.flushCalled) > 20 }, 400*time.Millisecond, time.Millisecond)
-	elapsed := time.Since(start)
-	require.InDelta(t, 200*time.Millisecond, elapsed, 3*float64(time.Millisecond))
 }
 
 func TestSendHeaders(t *testing.T) {

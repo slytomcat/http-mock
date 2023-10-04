@@ -39,24 +39,25 @@ type cfgValue struct {
 }
 
 const (
-	delaySize     = 25
-	flushInterval = 10 * time.Millisecond
+	delaySize = 25
 )
 
 var (
-	version      = "local build"
-	forwardURL   string
-	dataDirName  string
-	config       string
-	host         string
-	port         int
-	printVersion bool
-	reURL        = regexp.MustCompile(`https?://(.*)$`)
-	filters      []filter
-	cnt          asyncCounter
-	cfg          []cfgValue
-	cfgLock      sync.Mutex
-	logger       = log.New(os.Stdout, "", log.LUTC|log.Lmicroseconds|log.Lshortfile)
+	version       = "local build"
+	forwardURL    string
+	dataDirName   string
+	config        string
+	host          string
+	port          int
+	printVersion  bool
+	flushInterval = 10 * time.Millisecond
+	reURL         = regexp.MustCompile(`https?://(.*)$`)
+	filters       []filter
+	cnt           asyncCounter
+	cfg           []cfgValue
+	cfgLock       sync.Mutex
+	logger        = log.New(os.Stdout, "", log.LUTC|log.LstdFlags|log.Lmsgprefix)
+	client        *http.Client
 )
 
 func main() {
@@ -121,7 +122,9 @@ func root(cmd *cobra.Command, _ []string) {
 			fmt.Printf("creation data folder '%s' error: %s\n", dataDirName, err)
 			os.Exit(1)
 		}
+		client = http.DefaultClient
 		mux.HandleFunc("/", ProxyHandler)
+		logger.SetPrefix("PROXY ")
 		logger.Printf("Starting proxy server for %s on %s:%d\n", forwardURL, host, port)
 		break
 	case config != "":
@@ -130,6 +133,7 @@ func root(cmd *cobra.Command, _ []string) {
 			os.Exit(1)
 		}
 		mux.HandleFunc("/", MockHandler)
+		logger.SetPrefix("MOCK ")
 		logger.Printf("Starting MOCK server on %s:%d\n", host, port)
 	default:
 		fmt.Println("One of -c, -f, -h, or -v option have to be provided")
@@ -140,11 +144,11 @@ func root(cmd *cobra.Command, _ []string) {
 		Addr:    fmt.Sprintf("%s:%d", host, port),
 		Handler: mux,
 	}
-	go func() { log.Println(server.ListenAndServe()) }()
+	go func() { logger.Println(server.ListenAndServe()) }()
 	sig := make(chan (os.Signal), 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	s := <-sig // wait for a signal
-	logger.Printf("%s received.\nStarting shutdown...", s.String())
+	logger.Printf("%s received. Starting shutdown...", s.String())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	err := server.Shutdown(ctx)
@@ -168,13 +172,13 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	fileName := path.Join(dataDirName, fmt.Sprintf("%s_response_%d.raw", strings.ReplaceAll(r.URL.Path, "/", "_"), cnt.Next()))
 	logger.Printf("%s %s %s from %s in proxy mode, response file: %s ", r.Proto, r.Method, url, r.RemoteAddr, fileName)
 	// make the new request to forward the original one
-	request, err := http.NewRequest(r.Method, forwardURL+url, r.Body)
+	request, _ := http.NewRequest(r.Method, forwardURL+url, r.Body)
 	request.Close = r.Close
 	for k, v := range r.Header {
 		request.Header.Add(k, strings.Join(v, " "))
 	}
 	// make forwarding request
-	resp, err := http.DefaultClient.Do(request)
+	resp, err := client.Do(request)
 	if err != nil {
 		logger.Printf("ProxyHandler: making the forward request error: %s\n", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -199,23 +203,23 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		fileWriter := NewCachedRecorder(file, "response file writer")
+		fileWriter := NewCachedWritCloser(file, "Response file writer", nil)
 		defer fileWriter.Close()
-		responseWriter := NewCachedRecorder(NewWriteCloserFromWriter(w), "client response writer")
+		responseWriter := NewCachedWritCloser(NewWriteCloserFromWriter(w), "Client response writer", w.(http.Flusher).Flush)
 		sendHeaders(w.Header(), headers)
 		w.WriteHeader(resp.StatusCode)
-		defer startFlusher(w)() // start periodically flushing the response buffer
 		for scanner.Scan() {
 			now := time.Now()
-			chunk := append(scanner.Bytes(), '\n')
-			if _, err = fileWriter.Write(formatChink(now.Sub(tick), chunk)); err != nil {
-				logger.Printf("ProxyHandler: writing response to file error: %s", err)
-				break
-			}
+			delay := now.Sub(tick)
 			tick = now
-			// replay chunk to requester, it will be flushed by flusher
+			chunk := append(scanner.Bytes(), '\n')
+			// replay chunk to requester
 			if _, err := responseWriter.Write(chunk); err != nil {
 				logger.Printf("ProxyHandler: writing response to responseWriter error: %s", err)
+				break
+			}
+			if _, err = fileWriter.Write(formatChink(delay, chunk)); err != nil {
+				logger.Printf("ProxyHandler: writing response to file error: %s", err)
 				break
 			}
 		}
@@ -245,49 +249,64 @@ func sendHeaders(w http.Header, headers map[string]string) {
 // format chunk data part
 func formatChink(delay time.Duration, data []byte) []byte {
 	delayStr := strconv.FormatInt(delay.Milliseconds(), 10)
-	spacer := strings.Repeat(" ", delaySize-len(delayStr))
+	spacer := "                         "[:delaySize-len(delayStr)]
 	return append([]byte(spacer+delayStr+"|"), string(data)...)
 }
 
-// CachedRecorder is special io.WriteCloser for cache writing
-type CachedRecorder struct {
-	wc     io.WriteCloser
+// CachedWriteCloser is special io.WriteCloser for cache writing
+type CachedWriteCloser struct {
 	input  chan []byte
 	closed bool
 	lock   sync.Mutex
 }
 
-// NewCachedRecorder creates io.WriteCloser that pass data via channel buffer.
-func NewCachedRecorder(in io.WriteCloser, logPrefix string) io.WriteCloser {
+// NewCachedWritCloser creates io.WriteCloser that pass data via channel buffer.
+func NewCachedWritCloser(in io.WriteCloser, logPrefix string, flush func()) io.WriteCloser {
 	input := make(chan []byte, 1024)
-	c := &CachedRecorder{
-		wc:    in,
+	c := &CachedWriteCloser{
 		input: input,
 	}
 	go func() {
-		for data := range input {
-			_, err := c.wc.Write(data)
-			if err != nil {
-				logger.Printf("%s: writing to underlying WC error: %s", logPrefix, err)
-				c.lock.Lock()
-				c.closed = true
-				close(input)
-				c.lock.Unlock()
-				for range input {
-				} // drain
-				break
-			}
+		ticker := time.NewTicker(flushInterval)
+		if flush == nil {
+			ticker.Stop()
 		}
-		err := in.Close()
-		if err != nil {
-			logger.Printf("%s: closing underlying WC error: %s", logPrefix, err)
+		defer func() {
+			if flush != nil {
+				ticker.Stop()
+				flush()
+			}
+			err := in.Close()
+			if err != nil {
+				logger.Printf("%s: closing underlying WC error: %s", logPrefix, err)
+			}
+		}()
+		for {
+			select {
+			case data, ok := <-input:
+				if !ok {
+					return
+				}
+				if _, err := in.Write(data); err != nil {
+					logger.Printf("%s: writing to underlying WC error: %s", logPrefix, err)
+					c.lock.Lock()
+					c.closed = true
+					close(input)
+					c.lock.Unlock()
+					for range input {
+					} // drain input
+					return
+				}
+			case <-ticker.C:
+				flush()
+			}
 		}
 	}()
 	return c
 }
 
 // Write chunk in to file as data line with delay and chunk data
-func (c *CachedRecorder) Write(data []byte) (int, error) {
+func (c *CachedWriteCloser) Write(data []byte) (int, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	if c.closed {
@@ -298,7 +317,7 @@ func (c *CachedRecorder) Write(data []byte) (int, error) {
 }
 
 // Close underlying file
-func (c *CachedRecorder) Close() error {
+func (c *CachedWriteCloser) Close() error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	if c.closed {
@@ -363,7 +382,6 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 			logger.Printf("%s %s %s from %s in mock mode, response file: %s", r.Proto, r.Method, url, r.RemoteAddr, c.path)
 			sendHeaders(w.Header(), c.headers)
 			if c.stream { // streamed response
-				defer startFlusher(w)()
 				file, err := os.Open(c.path)
 				if err != nil {
 					readFileError(c.path, err, w, url)
@@ -371,6 +389,7 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				defer file.Close()
 				scanner := bufio.NewScanner(file)
+				responseWriter := NewCachedWritCloser(NewWriteCloserFromWriter(w), "Client response writer", w.(http.Flusher).Flush)
 				for scanner.Scan() {
 					line := scanner.Text()
 					delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
@@ -379,7 +398,7 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					time.Sleep(time.Duration(delay) * time.Millisecond)
-					_, err = w.Write([]byte(line[delaySize+1:] + "\n"))
+					_, err = responseWriter.Write([]byte(line[delaySize+1:] + "\n"))
 					if err != nil {
 						writeResponseError(err, w, url)
 						return
@@ -415,8 +434,6 @@ func readFileError(path string, err error, w http.ResponseWriter, url string) {
 // handle the writing error
 func writeResponseError(err error, w http.ResponseWriter, url string) {
 	logger.Printf("MockHandler: sending response error: %v while handling the %s\n", err, url)
-	w.WriteHeader(http.StatusInternalServerError)
-
 }
 
 // asynchronous counter
@@ -427,23 +444,4 @@ type asyncCounter struct {
 // threads-safe function get next counter value
 func (c *asyncCounter) Next() uint64 {
 	return atomic.AddUint64(&c.c, 1)
-}
-
-// start periodically flushing the response buffer in separate routine and return stopping function
-func startFlusher(w io.Writer) func() {
-	ctx, cancel := context.WithCancel(context.Background())
-	go func(ctx context.Context, flush func()) {
-		flush()
-		ticker := time.NewTicker(flushInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				flush()
-			case <-ctx.Done():
-				return
-			}
-		}
-	}(ctx, w.(http.Flusher).Flush)
-	return cancel
 }

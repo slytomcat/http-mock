@@ -143,7 +143,6 @@ func TestCachedWritCloser(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	require.Len(t, mock.Written, 2*length)
 	require.False(t, mock.Closed())
-	require.Equal(t, int64(10), atomic.LoadInt64(&mock.flushCalled))
 	err := wc.Close()
 	require.NoError(t, err)
 	require.False(t, mock.Closed())

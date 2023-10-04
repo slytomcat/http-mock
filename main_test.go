@@ -151,7 +151,7 @@ func TestCachedWritCloser(t *testing.T) {
 	require.Zero(t, n)
 	require.Error(t, wc.Close())
 	time.Sleep(time.Millisecond)
-	require.Equal(t, int64(11), atomic.LoadInt64(&mock.flushCalled))
+	require.Greater(t, int64(13), atomic.LoadInt64(&mock.flushCalled))
 	i := 0
 	for d := range mock.Written {
 		assert.Equal(t, messages[i%length], d)

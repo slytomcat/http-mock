@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -34,6 +37,7 @@ type MockWriter struct {
 	lock        sync.Mutex
 	flushCalled int64
 	header      http.Header
+	code        int
 	writeFunc   func([]byte) (int, error)
 	closeFunc   func() error
 }
@@ -41,6 +45,7 @@ type MockWriter struct {
 func NewMockWriter() *MockWriter {
 	return &MockWriter{
 		Written: make(chan []byte, 1024),
+		header:  http.Header{},
 		closed:  false,
 	}
 }
@@ -88,7 +93,11 @@ func (m *MockWriter) Closed() bool {
 }
 
 func (m *MockWriter) Header() http.Header {
-	return http.Header{}
+	return m.header
+}
+
+func (m *MockWriter) WriteHeader(code int) {
+	m.code = code
 }
 
 var messages = [][]byte{[]byte("S0"), []byte("S1"), []byte("S2"), []byte("S3"), []byte("S4"), []byte("S5"), []byte("S6"), []byte("S7"), []byte("S8"), []byte("S9")}
@@ -250,8 +259,8 @@ func compareConfig(t *testing.T, path string) {
 	}
 }
 
-func writeTempFile(data string) (string, error) {
-	file, err := os.CreateTemp(os.TempDir(), "test*")
+func writeTempFile(tempDit, data string) (string, error) {
+	file, err := os.CreateTemp(tempDit, "test*")
 	if err != nil {
 		return "", err
 	}
@@ -348,13 +357,14 @@ func TestReadConfig(t *testing.T) {
 		t.Run(tCase.name, func(t *testing.T) {
 			var path string
 			var err error
+			tempDir := t.TempDir()
 			defer func() {
 				filters = []filter{}
 			}()
 			if tCase.path != "" {
 				path = tCase.path
 			} else {
-				path, err = writeTempFile(tCase.cfgBody)
+				path, err = writeTempFile(tempDir, tCase.cfgBody)
 				require.NoError(t, err)
 			}
 			err = readConfig(path)
@@ -368,7 +378,6 @@ func TestReadConfig(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestStoreData(t *testing.T) {
@@ -391,4 +400,204 @@ func TestStoreData(t *testing.T) {
 	require.Equal(t, false, c.Stream)
 	storeData(notExistingPath, data, headers, url, code, "")
 	require.Len(t, cfg, idx+1)
+}
+
+type testFile struct {
+	name    string
+	content string
+}
+
+func TestHandlers(t *testing.T) {
+	testCases := []struct {
+		name      string            // test name
+		handler   bool              // True mock, False for proxy
+		config    string            // config data
+		files     []testFile        // responses files
+		forward   string            // forward URL
+		method    string            // request method
+		url       string            // request url
+		body      string            // request body
+		code      int               // request status code
+		chunked   bool              // chunked means that Transfer-Encoding: chunked must exists in the response and response have to be chunked
+		tEncoding bool              // add `Transfer-Encoding: chunked` to request header
+		aEncoding bool              // add `Accept-Encoding: gzip/deflate` to request header
+		expCode   int               // expected code
+		expResp   string            // expected response data
+		expChunks []string          // expecter chunked data
+		recAll    bool              // receive all chunked data
+		expHeader map[string]string // header of received response
+	}{
+		{
+			name:      "get 402 response",
+			handler:   true, // mock mode
+			method:    http.MethodGet,
+			url:       "/wrong",
+			config:    `[{"re": "^/wrong$", "path": "/dev/null", "code": 402}]`,
+			expCode:   402,
+			expHeader: map[string]string{"Content-Length": "0"},
+			recAll:    true,
+		},
+		{
+			name:      "get 404 response",
+			handler:   true, // mock mode
+			method:    http.MethodGet,
+			url:       "/not/exists",
+			config:    `[{"re": "^/wrong$", "path": "/dev/null", "code": 402}]`,
+			expCode:   404,
+			expHeader: map[string]string{"Content-Length": "0"},
+			recAll:    true,
+		},
+		{
+			name:    "get 200 response w body",
+			handler: true, // mock mode
+			method:  http.MethodGet,
+			url:     "/exists",
+			config:  `[{"re": "^/exists$", "path": "{dir}/resp1", "code": 200}]`,
+			files: []testFile{{
+				name:    "%s/resp1",
+				content: "some data",
+			}},
+			expCode:   200,
+			expResp:   "some data",
+			expHeader: map[string]string{"Content-Length": "9"},
+			recAll:    true,
+		},
+		{
+			name:    "get 200 ignore Transfer-Encoding",
+			handler: true, // mock mode
+			method:  http.MethodGet,
+			url:     "/exists",
+			config:  `[{"re": "^/exists$", "path": "{dir}/resp1", "code": 200, "headers":{"Transfer-Encoding": "chunked"}}]`,
+			files: []testFile{{
+				name:    "%s/resp1",
+				content: "some data",
+			}},
+			expCode:   200,
+			expResp:   "some data",
+			expHeader: map[string]string{"Content-Length": "9"},
+			recAll:    true,
+		},
+		{
+			name:    "get 200 chunked response",
+			handler: true, // mock mode
+			method:  http.MethodGet,
+			url:     "/exists",
+			chunked: true,
+			config:  `[{"re": "^/exists$", "path": "{dir}/resp1", "code": 200, "stream": true}]`,
+			files: []testFile{{
+				name: "%s/resp1",
+				content: `                       20|data line #1
+                       10|data line #2
+                       10|data line #3
+                       10|data line #4`,
+			}},
+			expCode: 200,
+			expChunks: []string{
+				"data line #1\n",
+				"data line #2\n",
+				"data line #3\n",
+			},
+			expHeader: map[string]string{"Transfer-Encoding": "chunked"},
+			recAll:    false,
+		},
+	}
+	cleanUp()
+	for _, tc := range testCases {
+		testName := tc.name
+		if tc.handler {
+			testName = "MockHandler " + testName
+		} else {
+			testName = "ProxyHandler " + testName
+		}
+		t.Run(testName, func(t *testing.T) {
+			defer cleanUp()
+			dataDirName = t.TempDir()
+			w := NewMockWriter()
+			r, err := http.NewRequest(tc.method, tc.url, bytes.NewReader([]byte(tc.body)))
+			if tc.chunked {
+				r.TransferEncoding = []string{"chunked"}
+			}
+			if tc.aEncoding {
+				r.Header.Add("Accept-Encoding", "gzip/deflate")
+			}
+			if tc.tEncoding {
+				r.TransferEncoding = []string{"chunked"}
+			}
+			require.NoError(t, err)
+			if tc.handler { // mock
+				if len(tc.config) > 0 {
+					for _, f := range tc.files {
+						err := os.WriteFile(fmt.Sprintf(f.name, dataDirName), []byte(f.content), 0644)
+						require.NoError(t, err)
+					}
+					cfgPath := path.Join(dataDirName, "config.json")
+					config := strings.ReplaceAll(tc.config, "{dir}", dataDirName)
+					err := os.WriteFile(cfgPath, []byte(config), 0644)
+					require.NoError(t, err)
+					err = readConfig(cfgPath)
+					require.NoError(t, err)
+				}
+				MockHandler(w, r)
+				assert.Equal(t, tc.expCode, w.code)
+				headers := map[string]string{}
+				chunked := false
+				for k, v := range w.header {
+					if k == "Transfer-Encoding" && v[0] == "chunked" {
+						chunked = true
+					}
+					headers[k] = strings.Join(v, "/")
+				}
+				assert.EqualValues(t, tc.expHeader, headers)
+				assert.Equal(t, tc.chunked, chunked)
+				if chunked {
+					for _, ch := range tc.expChunks {
+						received, f := channelReader(w.Written)
+						assert.Eventually(t, f, 50*time.Millisecond, 5*time.Microsecond)
+						assert.Equal(t, ch, fmt.Sprintf("%s", *received))
+					}
+				} else {
+					if len(tc.expResp) > 0 {
+						received, f := channelReader(w.Written)
+						assert.Eventually(t, f, 50*time.Millisecond, 5*time.Microsecond)
+						assert.Equal(t, tc.expResp, fmt.Sprintf("%s", *received))
+					} else {
+						if len(w.Written) > 0 {
+							data := <-w.Written
+							assert.Equal(t, "", fmt.Sprint(data))
+						}
+					}
+				}
+				if tc.recAll {
+					assert.Len(t, w.Written, 0)
+				}
+
+			} else { // proxy
+				server := httptest.NewServer(nil)
+				client = server.Client()
+				forwardURL = server.URL
+				// implement rest
+			}
+
+		})
+	}
+}
+
+func channelReader(ch chan []byte) (*[]byte, func() bool) {
+	received := make([]byte, 1, 4)
+	return &received, func() bool {
+		select {
+		case received = <-ch:
+			return true
+		default:
+			return false
+
+		}
+	}
+}
+
+func cleanUp() {
+	dataDirName = ""
+	filters = []filter{}
+	cfg = []cfgValue{}
+
 }

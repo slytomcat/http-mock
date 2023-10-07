@@ -436,6 +436,7 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				defer file.Close()
+				w.WriteHeader(c.code)
 				scanner := bufio.NewScanner(file)
 				responseWriter := NewCachedWritCloserFlusher(w, "Client response writer", nil, w.(http.Flusher).Flush)
 				defer responseWriter.Close()
@@ -463,10 +464,13 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 					readFileError(c.path, err, w, url)
 					return
 				}
-				_, err = w.Write(data)
-				if err != nil {
-					writeResponseError(err, w, url)
-					return
+				w.WriteHeader(c.code)
+				if len(data) > 0 {
+					_, err = w.Write(data)
+					if err != nil {
+						writeResponseError(err, w, url)
+						return
+					}
 				}
 				return
 			}
@@ -474,6 +478,7 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		logger.Printf("%s %s %s from %s in mock mode, no matching records in config", r.Proto, r.Method, url, r.RemoteAddr)
+		w.Header().Set("Content-Length", "0")
 		w.WriteHeader(http.StatusNotFound)
 	}
 }

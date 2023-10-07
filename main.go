@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,19 +25,23 @@ import (
 )
 
 type filter struct {
-	re      *regexp.Regexp
-	path    string
-	code    int
-	headers map[string]string
-	stream  bool
+	re       *regexp.Regexp
+	bodyRe   *regexp.Regexp
+	bodyHash string
+	path     string
+	code     int
+	headers  map[string]string
+	stream   bool
 }
 
 type cfgValue struct {
-	Re      string            `json:"re"`
-	Path    string            `json:"path"`
-	Code    int               `json:"code,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Stream  bool              `json:"stream,omitempty"`
+	Re       string            `json:"re"`
+	BodyRe   string            `json:"body-re,omitempty"`
+	BodyHash string            `json:"body-hash,omitempty"`
+	Path     string            `json:"path"`
+	Code     int               `json:"code,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	Stream   bool              `json:"stream,omitempty"`
 }
 
 const (
@@ -70,7 +76,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&host, "host", "s", "localhost", "host to start service")
 	rootCmd.Flags().IntVarP(&port, "port", "p", 8080, "port to start service")
 	rootCmd.Flags().StringVarP(&forwardURL, "forward", "f", "", "URL for forwarding requests")
-	rootCmd.Flags().StringVarP(&config, "config", "c", "", "path for configuration file")
+	rootCmd.Flags().StringVarP(&config, "config", "c", "", "path to folder with config and responses")
 	rootCmd.Flags().BoolVarP(&printVersion, "version", "v", false, "print version and exit")
 	rootCmd.Execute()
 }
@@ -81,25 +87,42 @@ func readConfig(path string) error {
 		return fmt.Errorf("config file opening/reading error: %w", err)
 	}
 	cfg := make([]cfgValue, 0, 8)
-	json.Unmarshal(cfgData, &cfg)
+	err = json.Unmarshal(cfgData, &cfg)
+	if err != nil {
+		return fmt.Errorf("decoding config error: %v", err)
+	}
 	for i, c := range cfg {
 		if c.Re == "" || c.Path == "" {
 			return fmt.Errorf("record #%d doesn't contain mandatory values in fields 'path' and 're'", i)
 		}
-		compiled, err := regexp.Compile(c.Re)
+		re, err := regexp.Compile(c.Re)
 		if err != nil {
 			return fmt.Errorf("compiling 're' field in record #%d error: %w", i, err)
 		}
 		if _, err = os.Stat(c.Path); os.IsNotExist(err) {
 			return fmt.Errorf("file '%s' from 'path' of record #%d is not exists", c.Path, i)
 		}
+		var bodyRe *regexp.Regexp
+		if c.BodyRe != "" {
+			bodyRe, err = regexp.Compile(c.BodyRe)
+			if err != nil {
+				return fmt.Errorf("compiling 'body-re' field in record #%d error: %w", i, err)
+			}
+		} else {
+			bodyRe, _ = regexp.Compile(".*")
+		}
 		filters = append(filters, filter{
-			re:      compiled,
-			path:    c.Path,
-			code:    c.Code,
-			stream:  c.Stream,
-			headers: c.Headers,
+			re:       re,
+			bodyRe:   bodyRe,
+			bodyHash: c.BodyHash,
+			path:     c.Path,
+			code:     c.Code,
+			stream:   c.Stream,
+			headers:  c.Headers,
 		})
+	}
+	if len(filters) == 0 {
+		return fmt.Errorf("file %s contains no data", path)
 	}
 	return nil
 }
@@ -169,15 +192,29 @@ func root(cmd *cobra.Command, _ []string) {
 // It also creates the configuration that can be used in mock mode
 func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
-	fileName := path.Join(dataDirName, fmt.Sprintf("%s_response_%d.raw", strings.ReplaceAll(r.URL.Path, "/", "_"), cnt.Next()))
-	logger.Printf("%s %s %s from %s in proxy mode, response file: %s ", r.Proto, r.Method, url, r.RemoteAddr, fileName)
+	fileName := path.Join(dataDirName, fmt.Sprintf("%s_response_%d.raw", strings.ReplaceAll(url[1:], "/", "_"), cnt.Next()))
+	logger.Printf("%s %s %s from %s in proxy mode, response file: %s ", r.Proto, r.Method, r.URL, r.RemoteAddr, fileName)
 	// make the new request to forward the original one
-	request, _ := http.NewRequest(r.Method, forwardURL+url, r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		logger.Printf("ProxyHandler: reading request body error: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	request, err := http.NewRequest(r.Method, forwardURL+url, bytes.NewReader(body))
+	if err != nil {
+		logger.Printf("ProxyHandler: creating request error: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	request.Close = r.Close
 	for k, v := range r.Header {
-		request.Header.Add(k, strings.Join(v, " "))
+		if k != "Accept-Encoding" { // it will be automatically added by transport and the response will be automatically decompressed
+			request.Header.Add(k, strings.Join(v, " "))
+		}
 	}
-	// make forwarding request
+	bodyHash := getBodyHash(body)
+	// perform forwarding request
 	resp, err := client.Do(request)
 	if err != nil {
 		logger.Printf("ProxyHandler: making the forward request error: %s\n", err)
@@ -185,6 +222,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	// extract the response header
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		headers[k] = strings.Join(v, " ")
@@ -192,8 +230,9 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	if resp.Close {
 		headers["Connection"] = "close"
 	}
+	// fmt.Printf("DEBUG:\nheaders: %v\nresp: %+v\n", headers, resp)
 	if len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
-		// streamed response
+		// chunked response
 		tick := time.Now()
 		headers["Transfer-Encoding"] = "chunked"
 		scanner := bufio.NewScanner(resp.Body)
@@ -203,9 +242,10 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		fileWriter := NewCachedWritCloser(file, "Response file writer", nil)
+		fileWriter := NewCachedWritCloserFlusher(file, "Response file writer", file.Close, nil)
 		defer fileWriter.Close()
-		responseWriter := NewCachedWritCloser(NewWriteCloserFromWriter(w), "Client response writer", w.(http.Flusher).Flush)
+		responseWriter := NewCachedWritCloserFlusher(w, "Client response writer", nil, w.(http.Flusher).Flush)
+		defer responseWriter.Close()
 		sendHeaders(w.Header(), headers)
 		w.WriteHeader(resp.StatusCode)
 		for scanner.Scan() {
@@ -223,7 +263,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		go storeConfig(fileName, headers, url, resp.StatusCode, true) // store config value in separate routine
+		go storeConfig(fileName, headers, url, resp.StatusCode, true, bodyHash) // store config value in separate routine
 	} else { // conventional response
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -231,7 +271,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		go storeData(fileName, data, headers, url, resp.StatusCode) // write data to file and store config value in separate routine
+		go storeData(fileName, data, headers, url, resp.StatusCode, bodyHash) // write data to file and store config value in separate routine
 		// replay response to the requestor
 		sendHeaders(w.Header(), headers)
 		w.WriteHeader(resp.StatusCode)
@@ -260,25 +300,26 @@ type CachedWriteCloser struct {
 	lock   sync.Mutex
 }
 
-// NewCachedWritCloser creates io.WriteCloser that pass data via channel buffer.
-func NewCachedWritCloser(in io.WriteCloser, logPrefix string, flush func()) io.WriteCloser {
+// NewCachedWritCloserFlusher creates io.WriteCloser that pass data via channel buffer.
+func NewCachedWritCloserFlusher(in io.Writer, logPrefix string, closeFunc func() error, flushFunc func()) io.WriteCloser {
 	input := make(chan []byte, 1024)
 	c := &CachedWriteCloser{
 		input: input,
 	}
 	go func() {
 		ticker := time.NewTicker(flushInterval)
-		if flush == nil {
+		if flushFunc == nil {
 			ticker.Stop()
 		}
 		defer func() {
-			if flush != nil {
+			if flushFunc != nil {
 				ticker.Stop()
-				flush()
 			}
-			err := in.Close()
-			if err != nil {
-				logger.Printf("%s: closing underlying WC error: %s", logPrefix, err)
+			if closeFunc != nil {
+				err := closeFunc()
+				if err != nil {
+					logger.Printf("%s: closing underlying WC error: %s", logPrefix, err)
+				}
 			}
 		}()
 		for {
@@ -295,10 +336,17 @@ func NewCachedWritCloser(in io.WriteCloser, logPrefix string, flush func()) io.W
 					c.lock.Unlock()
 					for range input {
 					} // drain input
+					if flushFunc != nil {
+						ticker.Stop()
+						for len(ticker.C) > 0 {
+							<-ticker.C
+						}
+						flushFunc = nil
+					}
 					return
 				}
 			case <-ticker.C:
-				flush()
+				flushFunc()
 			}
 		}
 	}()
@@ -328,60 +376,60 @@ func (c *CachedWriteCloser) Close() error {
 	return nil
 }
 
-// WriteCloserFromWriter is io.WriteCloser wrapper over io.Writer
-type WriteCloserFromWriter struct {
-	wc io.Writer
-}
-
-// NewWriteCloserFromWriter returns io.WriteCloser wrapper over io.Writer
-func NewWriteCloserFromWriter(in io.Writer) io.WriteCloser {
-	return &WriteCloserFromWriter{wc: in}
-}
-
-// Write io.WriteCloser implementation
-func (w *WriteCloserFromWriter) Write(data []byte) (int, error) {
-	return w.wc.Write(data)
-}
-
-// Close io.WriteCloser implementation
-func (w *WriteCloserFromWriter) Close() error {
-	return nil
-}
-
 // store data to the file and make new record in config cache
-func storeData(fileName string, data []byte, headers map[string]string, url string, code int) {
+func storeData(fileName string, data []byte, headers map[string]string, url string, code int, bodyHash string) {
 	err := os.WriteFile(fileName, data, 0644)
 	if err != nil {
 		logger.Printf("storeData: writing '%s' error: %s", fileName, err)
 		return
 	}
-	storeConfig(fileName, headers, url, code, false)
+	storeConfig(fileName, headers, url, code, false, bodyHash)
 }
 
 // make new item into the config cache
-func storeConfig(fileName string, headers map[string]string, url string, code int, stream bool) {
+func storeConfig(fileName string, headers map[string]string, url string, code int, stream bool, bodyHash string) {
 	newCfg := cfgValue{
-		Re:      strings.Replace(strings.Replace(fmt.Sprintf("^%s$", url), "?", "\\?", -1), ".", "\\.", -1),
-		Path:    fileName,
-		Code:    code,
-		Headers: headers,
-		Stream:  stream,
+		Re:       strings.Replace(strings.Replace(fmt.Sprintf("^%s$", url), "?", "\\?", -1), ".", "\\.", -1),
+		BodyHash: bodyHash,
+		BodyRe:   "^$",
+		Path:     fileName,
+		Code:     code,
+		Headers:  headers,
+		Stream:   stream,
 	}
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	cfg = append(cfg, newCfg)
 }
 
+func getBodyHash(body []byte) string {
+	if len(body) > 0 {
+		return fmt.Sprintf("%X", sha256.Sum256(body))
+	}
+	return ""
+}
+
 // MockHandler handles requests by replaying the responses from files according to the configuration
 func MockHandler(w http.ResponseWriter, r *http.Request) {
 	url := r.URL.String()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		logger.Printf("MockHandler: reading request body error: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	bodyHash := getBodyHash(body)
 	found := false
 	for _, c := range filters {
-		if c.re.MatchString(url) {
+		if c.re.MatchString(url) && (c.bodyHash == bodyHash || c.bodyRe.Match(body)) {
 			found = true
 			logger.Printf("%s %s %s from %s in mock mode, response file: %s", r.Proto, r.Method, url, r.RemoteAddr, c.path)
 			sendHeaders(w.Header(), c.headers)
+			// fmt.Printf("DEBUG:\ncfg: %+v\n", c)
 			if c.stream { // streamed response
+				if te := w.Header().Get("Transfer-Encoding"); te != "chunked" {
+					w.Header().Add("Transfer-Encoding", "chunked")
+				}
 				file, err := os.Open(c.path)
 				if err != nil {
 					readFileError(c.path, err, w, url)
@@ -389,7 +437,8 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				defer file.Close()
 				scanner := bufio.NewScanner(file)
-				responseWriter := NewCachedWritCloser(NewWriteCloserFromWriter(w), "Client response writer", w.(http.Flusher).Flush)
+				responseWriter := NewCachedWritCloserFlusher(w, "Client response writer", nil, w.(http.Flusher).Flush)
+				defer responseWriter.Close()
 				for scanner.Scan() {
 					line := scanner.Text()
 					delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
@@ -405,7 +454,11 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			} else { // ordinal response
+				if te := w.Header().Get("Transfer-Encoding"); te == "chunked" {
+					w.Header().Del("Transfer-Encoding")
+				}
 				data, err := os.ReadFile(c.path)
+				w.Header().Set("Content-Length", fmt.Sprint(len(data)))
 				if err != nil {
 					readFileError(c.path, err, w, url)
 					return

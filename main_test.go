@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -125,7 +127,7 @@ func TestMockWriter(t *testing.T) {
 func TestCachedWritCloser(t *testing.T) {
 	mock := NewMockWriter()
 	flushInterval = 5 * time.Millisecond
-	wc := NewCachedWritCloser(mock, "", mock.Flush)
+	wc := NewCachedWritCloserFlusher(mock, "", mock.Close, mock.Flush)
 	length := len(messages)
 	// slow
 	for i := 0; i < length; i++ {
@@ -164,7 +166,7 @@ func TestCachedWritCloser(t *testing.T) {
 func TestCachedWritCloserErrors(t *testing.T) {
 	tError := errors.New("test error")
 	mock := NewMockWriter()
-	wc := NewCachedWritCloser(mock, "", nil)
+	wc := NewCachedWritCloserFlusher(mock, "", mock.Close, nil)
 	mock.closeFunc = func() error {
 		return tError
 	}
@@ -178,7 +180,7 @@ func TestCachedWritCloserErrors(t *testing.T) {
 	require.Equal(t, data, <-mock.Written)
 	require.False(t, mock.Closed())
 	mock = NewMockWriter()
-	wc = NewCachedWritCloser(mock, "", nil)
+	wc = NewCachedWritCloserFlusher(mock, "", mock.Close, nil)
 	mock.writeFunc = func([]byte) (int, error) {
 		return 0, tError
 	}
@@ -187,17 +189,6 @@ func TestCachedWritCloserErrors(t *testing.T) {
 	require.Equal(t, 9, n)
 	time.Sleep(time.Millisecond)
 	require.True(t, mock.Closed())
-}
-
-func TestWriteCloserFromWriter(t *testing.T) {
-	wc := NewMockWriter()
-	wcw := NewWriteCloserFromWriter(wc)
-	n, err := wcw.Write([]byte("data"))
-	require.NoError(t, err)
-	require.Equal(t, 4, n)
-	require.False(t, wc.Closed())
-	require.NoError(t, wcw.Close())
-	require.False(t, wc.Closed())
 }
 
 func TestAsyncCounter(t *testing.T) {
@@ -259,13 +250,13 @@ func compareConfig(t *testing.T, path string) {
 	}
 }
 
-func writeTempFile(data []byte) (string, error) {
+func writeTempFile(data string) (string, error) {
 	file, err := os.CreateTemp(os.TempDir(), "test*")
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
-	_, err = file.Write(data)
+	_, err = file.Write([]byte(data))
 	if err != nil {
 		return "", err
 	}
@@ -273,51 +264,111 @@ func writeTempFile(data []byte) (string, error) {
 }
 
 func TestReadConfig(t *testing.T) {
-	path := "sample_data/config.json"
-	err := readConfig(path)
-	require.NoError(t, err)
-	compareConfig(t, path)
-	err = readConfig(notExistingPath)
-	require.EqualError(t, err, "config file opening/reading error: open /notExists/path: no such file or directory")
-	data, err := json.Marshal([]cfgValue{{
-		Re:      "",
-		Path:    path,
-		Code:    0,
-		Headers: map[string]string{},
-		Stream:  false,
-	}})
-	require.NoError(t, err)
-	path, err = writeTempFile(data)
-	require.NoError(t, err)
-	defer os.Remove(path)
-	err = readConfig(path)
-	require.EqualError(t, err, "record #0 doesn't contain mandatory values in fields 'path' and 're'")
-	data, err = json.Marshal([]cfgValue{{
-		Re:      "\\3^",
-		Path:    path,
-		Code:    0,
-		Headers: map[string]string{},
-		Stream:  false,
-	}})
-	require.NoError(t, err)
-	path, err = writeTempFile(data)
-	require.NoError(t, err)
-	defer os.Remove(path)
-	err = readConfig(path)
-	require.EqualError(t, err, "compiling 're' field in record #0 error: error parsing regexp: invalid escape sequence: `\\3`")
-	data, err = json.Marshal([]cfgValue{{
-		Re:      "some",
-		Path:    notExistingPath,
-		Code:    0,
-		Headers: map[string]string{},
-		Stream:  false,
-	}})
-	require.NoError(t, err)
-	path, err = writeTempFile(data)
-	require.NoError(t, err)
-	defer os.Remove(path)
-	err = readConfig(path)
-	require.EqualError(t, err, "file '/notExists/path' from 'path' of record #0 is not exists")
+	testCases := []struct {
+		name     string
+		path     string
+		cfgBody  string
+		errorStr string
+	}{{
+		name: "Ok",
+		cfgBody: `[
+    {
+        "re": "/path\\?arg=val",
+        "path": "sample_data/body_1.json",
+        "headers": {
+            "Connection": "keep-alive"
+        }
+    },
+    {
+        "re": "/wrong$",
+		"body-re": "^$",
+        "path": "/dev/null",
+        "code": 400
+    },
+    {
+        "re": "/stream$",
+        "path": "sample_data/stream.data",
+        "headers": {
+            "Transfer-Encoding": "chunked",
+            "Content-Type": "text/CSV; charset=utf-8"
+        },
+        "stream": true
+    }]`,
+	}, {
+		name:     "wrong config path",
+		path:     notExistingPath,
+		errorStr: "config file opening/reading error: open /notExists/path: no such file or directory",
+	}, {
+		name:     "empty config",
+		cfgBody:  `[]`,
+		errorStr: "file %s contains no data",
+	}, {
+		name:     "bad json",
+		cfgBody:  `[`,
+		errorStr: "unmarshalling config error: unexpected end of JSON input",
+	}, {
+		name: "empty re",
+		cfgBody: `[{
+		"re": "",
+		"path": "sample_data/body_1.json"
+		}]`,
+		errorStr: "record #0 doesn't contain mandatory values in fields 'path' and 're'",
+	}, {
+		name: "empty path",
+		cfgBody: `[{
+		"re": "^$",
+		"path": ""
+		}]`,
+		errorStr: "record #0 doesn't contain mandatory values in fields 'path' and 're'",
+	}, {
+		name: "bad re",
+		cfgBody: `[{
+		"re": "\\3^",
+		"path": "sample_data/body_1.json"
+		}]`,
+		errorStr: "compiling 're' field in record #0 error: error parsing regexp: invalid escape sequence: `\\3`",
+	}, {
+		name: "bad body re",
+		cfgBody: `[{
+		"re": "^$",
+		"body-re": "\\3^",
+		"path": "sample_data/body_1.json"
+		}]`,
+		errorStr: "compiling 'body-re' field in record #0 error: error parsing regexp: invalid escape sequence: `\\3`",
+	}, {
+		name: "path not exists",
+		cfgBody: `[{
+		"re": "^$",
+		"path": "/notExists/path"
+		}]`,
+		errorStr: "file '/notExists/path' from 'path' of record #0 is not exists",
+	}}
+
+	for _, tCase := range testCases {
+		t.Run(tCase.name, func(t *testing.T) {
+			var path string
+			var err error
+			defer func() {
+				filters = []filter{}
+			}()
+			if tCase.path != "" {
+				path = tCase.path
+			} else {
+				path, err = writeTempFile(tCase.cfgBody)
+				require.NoError(t, err)
+			}
+			err = readConfig(path)
+			if tCase.errorStr != "" {
+				if strings.Contains(tCase.errorStr, "%s") {
+					tCase.errorStr = fmt.Sprintf(tCase.errorStr, path)
+				}
+				require.EqualError(t, err, tCase.errorStr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
 }
 
 func TestStoreData(t *testing.T) {
@@ -330,7 +381,7 @@ func TestStoreData(t *testing.T) {
 	url := "/some/url"
 	code := 777
 	headers := map[string]string{"key": "val"}
-	storeData(filePath, data, headers, url, code)
+	storeData(filePath, data, headers, url, code, "")
 	require.Len(t, cfg, idx+1)
 	c := cfg[idx]
 	require.Equal(t, "^"+url+"$", c.Re)
@@ -338,6 +389,6 @@ func TestStoreData(t *testing.T) {
 	require.EqualValues(t, headers, c.Headers)
 	require.Equal(t, filePath, c.Path)
 	require.Equal(t, false, c.Stream)
-	storeData(notExistingPath, data, headers, url, code)
+	storeData(notExistingPath, data, headers, url, code, "")
 	require.Len(t, cfg, idx+1)
 }

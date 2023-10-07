@@ -305,7 +305,7 @@ func TestReadConfig(t *testing.T) {
 	}, {
 		name:     "bad json",
 		cfgBody:  `[`,
-		errorStr: "unmarshalling config error: unexpected end of JSON input",
+		errorStr: "decoding config error: unexpected end of JSON input",
 	}, {
 		name: "empty re",
 		cfgBody: `[{

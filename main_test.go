@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -175,7 +176,7 @@ func TestCachedWritCloser(t *testing.T) {
 func TestCachedWritCloserErrors(t *testing.T) {
 	tError := errors.New("test error")
 	mock := NewMockWriter()
-	wc := NewCachedWritCloserFlusher(mock, "", mock.Close, nil)
+	wc := NewCachedWritCloserFlusher(mock, "", mock.Close, mock.Flush)
 	mock.closeFunc = func() error {
 		return tError
 	}
@@ -189,7 +190,7 @@ func TestCachedWritCloserErrors(t *testing.T) {
 	require.Equal(t, data, <-mock.Written)
 	require.False(t, mock.Closed())
 	mock = NewMockWriter()
-	wc = NewCachedWritCloserFlusher(mock, "", mock.Close, nil)
+	wc = NewCachedWritCloserFlusher(mock, "", mock.Close, mock.Flush)
 	mock.writeFunc = func([]byte) (int, error) {
 		return 0, tError
 	}
@@ -428,7 +429,7 @@ func TestHandlers(t *testing.T) {
 		expHeader map[string]string // header of received response
 	}{
 		{
-			name:      "get 402 response",
+			name:      "GET 402 response",
 			handler:   true, // mock mode
 			method:    http.MethodGet,
 			url:       "/wrong",
@@ -438,7 +439,7 @@ func TestHandlers(t *testing.T) {
 			recAll:    true,
 		},
 		{
-			name:      "get 404 response",
+			name:      "GET 404 response",
 			handler:   true, // mock mode
 			method:    http.MethodGet,
 			url:       "/not/exists",
@@ -448,7 +449,7 @@ func TestHandlers(t *testing.T) {
 			recAll:    true,
 		},
 		{
-			name:    "get 200 response w body",
+			name:    "GET 200 response w body",
 			handler: true, // mock mode
 			method:  http.MethodGet,
 			url:     "/exists",
@@ -463,7 +464,39 @@ func TestHandlers(t *testing.T) {
 			recAll:    true,
 		},
 		{
-			name:    "get 200 ignore Transfer-Encoding",
+			name:    "POST 200 response w body re",
+			handler: true, // mock mode
+			method:  http.MethodPost,
+			url:     "/",
+			body:    `{"this": "body"}`,
+			config:  `[{"re": "^/$", "body-re": ".*body.*", "path": "{dir}/resp1", "code": 200}]`,
+			files: []testFile{{
+				name:    "%s/resp1",
+				content: "some data",
+			}},
+			expCode:   200,
+			expResp:   "some data",
+			expHeader: map[string]string{"Content-Length": "9"},
+			recAll:    true,
+		},
+		{
+			name:    "POST 200 response w body hash",
+			handler: true, // mock mode
+			method:  http.MethodPost,
+			url:     "/",
+			body:    `{"this": "body"}`,
+			config:  `[{"re": "^/$", "body-hash": "988A1BDA6F42A960A690411E7C51BC4DD0034C3F562ABE0508F567BA0AD7C103", "path": "{dir}/resp1", "code": 200}]`,
+			files: []testFile{{
+				name:    "%s/resp1",
+				content: "some data",
+			}},
+			expCode:   200,
+			expResp:   "some data",
+			expHeader: map[string]string{"Content-Length": "9"},
+			recAll:    true,
+		},
+		{
+			name:    "GET 200 ignore Transfer-Encoding",
 			handler: true, // mock mode
 			method:  http.MethodGet,
 			url:     "/exists",
@@ -496,8 +529,101 @@ func TestHandlers(t *testing.T) {
 				"data line #1\n",
 				"data line #2\n",
 				"data line #3\n",
+				"data line #4\n",
 			},
 			expHeader: map[string]string{"Transfer-Encoding": "chunked"},
+			recAll:    true,
+		},
+		{
+			name:    "get 200 chunked response not all",
+			handler: true, // mock mode
+			method:  http.MethodGet,
+			url:     "/exists",
+			chunked: true,
+			config:  `[{"re": "^/exists$", "path": "{dir}/resp1", "code": 200, "stream": true}]`,
+			files: []testFile{{
+				name: "%s/resp1",
+				content: `                       20|data line #1
+                       10|data line #2
+                       10|data line #3
+                       10|data line #4`,
+			}},
+			expCode: 200,
+			expChunks: []string{
+				"data line #1\n",
+				"data line #2\n",
+				"data line #3\n",
+			},
+			expHeader: map[string]string{"Transfer-Encoding": "chunked"},
+			recAll:    false,
+		},
+		{
+			name:      "GET 200 w body",
+			handler:   false, // proxy mode
+			method:    http.MethodGet,
+			url:       "/path",
+			code:      200,
+			chunked:   false,
+			expCode:   200,
+			expResp:   "data",
+			expHeader: map[string]string{"Content-Length": "4", "Content-Type": "text/plain; charset=utf-8"},
+			files: []testFile{{
+				name:    "%s/path_response_1.raw",
+				content: "data",
+			}},
+			config: `[{"re": "^/path$", "path": "{dir}/path_response_1.raw", "code": 200]`,
+		},
+		{
+			name:      "GET 404 wo body",
+			handler:   false, // proxy mode
+			method:    http.MethodGet,
+			url:       "/not/exists",
+			chunked:   false,
+			code:      404,
+			expCode:   404,
+			expHeader: map[string]string{"Content-Length": "0"},
+			files: []testFile{{
+				name:    "%s/not_exists_response_1.raw",
+				content: "",
+			}},
+		},
+		{
+			name:    "get 200 chunked response",
+			handler: false, // proxy mode
+			method:  http.MethodGet,
+			url:     "/exists",
+			chunked: true,
+			files: []testFile{{
+				name: "%s/exists_response_1.raw",
+			}},
+			code:    200,
+			expCode: 200,
+			expChunks: []string{
+				"data line #1\n",
+				"data line #2\n",
+				"data line #3\n",
+				"data line #4\n",
+			},
+			expHeader: map[string]string{"Transfer-Encoding": "chunked"},
+			recAll:    true,
+		},
+		{
+			name:    "get 200 chunked response not all",
+			handler: false, // proxy mode
+			method:  http.MethodGet,
+			url:     "/exists",
+			code:    200,
+			chunked: true,
+			files: []testFile{{
+				name: "%s/exists_response_1.raw",
+			}},
+			expCode: 200,
+			expChunks: []string{
+				"data line #1\n",
+				"data line #2\n",
+				"data line #3\n",
+			},
+			expHeader: map[string]string{"Transfer-Encoding": "chunked", "Connection": "close"},
 			recAll:    false,
 		},
 	}
@@ -570,34 +696,116 @@ func TestHandlers(t *testing.T) {
 				if tc.recAll {
 					assert.Len(t, w.Written, 0)
 				}
-
 			} else { // proxy
-				server := httptest.NewServer(nil)
+				defer cleanUp()
+				dataDirName = t.TempDir()
+				handler := &testHandler{}
+				server := httptest.NewServer(handler)
 				client = server.Client()
 				forwardURL = server.URL
-				// implement rest
+				if tc.chunked {
+					handler.handleFunc = func(w http.ResponseWriter, r *http.Request) {
+						w.WriteHeader(tc.expCode)
+						for k, v := range tc.expHeader {
+							w.Header().Add(k, v)
+						}
+						flush := w.(http.Flusher).Flush
+						for _, chunk := range tc.expChunks {
+							time.Sleep(5 * time.Millisecond)
+							w.Write([]byte(chunk))
+							flush()
+						}
+					}
+				} else {
+					handler.code = tc.expCode
+					handler.response = []byte(tc.expResp)
+					handler.headers = tc.expHeader
+				}
+				ProxyHandler(w, r)
+				assert.Equal(t, tc.expCode, w.code)
+				time.Sleep(5 * time.Millisecond)
+				fn := ""
+				for _, f := range tc.files {
+					fn = fmt.Sprintf(f.name, dataDirName)
+					data, err := os.ReadFile(fn)
+					assert.NoError(t, err)
+					if tc.chunked {
+						scanner := bufio.NewScanner(bytes.NewReader(data))
+						i := 0
+						for scanner.Scan() {
+							assert.Equal(t, tc.expChunks[i], scanner.Text()[26:]+"\n")
+							i++
+						}
+					} else {
+						assert.Equal(t, f.content, fmt.Sprintf("%s", data))
+					}
+				}
+				headers := map[string]string{}
+				chunked := false
+				for k, v := range w.header {
+					if k == "Transfer-Encoding" && v[0] == "chunked" {
+						chunked = true
+					}
+					headers[k] = strings.Join(v, "/")
+				}
+				assert.Equal(t, tc.chunked, chunked)
+				cfgLock.Lock()
+				assert.Len(t, cfg, 1)
+				c := cfg[0]
+				cfgLock.Unlock()
+				assert.EqualValues(t, headers, c.Headers)
+				assert.Equal(t, fmt.Sprintf("^%s$", tc.url), c.Re)
+				assert.Equal(t, fn, c.Path)
+				assert.Equal(t, "^$", c.BodyRe)
+				assert.Equal(t, getBodyHash([]byte(tc.body)), c.BodyHash)
+				assert.Equal(t, tc.chunked, c.Stream)
+				assert.Equal(t, tc.code, c.Code)
 			}
-
 		})
 	}
 }
 
+type testHandler struct {
+	response   []byte
+	headers    map[string]string
+	code       int
+	handleFunc func(w http.ResponseWriter, r *http.Request)
+}
+
+func (th *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if th.handleFunc != nil {
+		th.handleFunc(w, r)
+	}
+	w.WriteHeader(th.code)
+	for k, v := range th.headers {
+		w.Header().Add(k, v)
+	}
+	w.Header().Set("Content-Length", fmt.Sprint(len(th.response)))
+	w.Write(th.response)
+}
+
 func channelReader(ch chan []byte) (*[]byte, func() bool) {
-	received := make([]byte, 1, 4)
+	received := make([]byte, 0, 16)
 	return &received, func() bool {
 		select {
 		case received = <-ch:
 			return true
 		default:
 			return false
-
 		}
 	}
 }
 
+func (c *asyncCounter) reset() {
+	atomic.StoreUint64(&c.c, 0)
+}
+
 func cleanUp() {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
 	dataDirName = ""
 	filters = []filter{}
 	cfg = []cfgValue{}
-
+	client = nil
+	cnt.reset()
 }

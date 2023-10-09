@@ -11,13 +11,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -246,20 +247,6 @@ func loadCfgValues(t *testing.T, path string) []cfgValue {
 	return values
 }
 
-func compareConfig(t *testing.T, path string) {
-	cfg := loadCfgValues(t, path)
-	for i, v := range filters {
-		c := cfg[i]
-		compiled, err := regexp.Compile(c.Re)
-		assert.NoError(t, err, i)
-		assert.Equal(t, compiled.String(), v.re.String(), i)
-		assert.Equal(t, c.Code, v.code, i)
-		assert.Equal(t, c.Headers, v.headers, i)
-		assert.Equal(t, c.Path, v.path, i)
-		assert.Equal(t, c.Stream, v.stream, i)
-	}
-}
-
 func writeTempFile(tempDit, data string) (string, error) {
 	file, err := os.CreateTemp(tempDit, "test*")
 	if err != nil {
@@ -419,9 +406,9 @@ func TestHandlers(t *testing.T) {
 		url       string            // request url
 		body      string            // request body
 		code      int               // request status code
-		chunked   bool              // chunked means that Transfer-Encoding: chunked must exists in the response and response have to be chunked
+		headers   map[string]string // request headers
 		tEncoding bool              // add `Transfer-Encoding: chunked` to request header
-		aEncoding bool              // add `Accept-Encoding: gzip/deflate` to request header
+		chunked   bool              // chunked means that Transfer-Encoding: chunked must exists in the response and response have to be chunked
 		expCode   int               // expected code
 		expResp   string            // expected response data
 		expChunks []string          // expecter chunked data
@@ -453,6 +440,7 @@ func TestHandlers(t *testing.T) {
 			handler: true, // mock mode
 			method:  http.MethodGet,
 			url:     "/exists",
+			headers: map[string]string{"Accept-Encoding": "gzip/deflate"},
 			config:  `[{"re": "^/exists$", "path": "{dir}/resp1", "code": 200}]`,
 			files: []testFile{{
 				name:    "%s/resp1",
@@ -469,6 +457,7 @@ func TestHandlers(t *testing.T) {
 			method:  http.MethodPost,
 			url:     "/",
 			body:    `{"this": "body"}`,
+			headers: map[string]string{"Connection": "close"},
 			config:  `[{"re": "^/$", "body-re": ".*body.*", "path": "{dir}/resp1", "code": 200}]`,
 			files: []testFile{{
 				name:    "%s/resp1",
@@ -563,6 +552,7 @@ func TestHandlers(t *testing.T) {
 			method:    http.MethodGet,
 			url:       "/path",
 			code:      200,
+			headers:   map[string]string{"Connection": "close", "Accept-Encoding": "gzip/deflate"},
 			chunked:   false,
 			expCode:   200,
 			expResp:   "data",
@@ -581,7 +571,7 @@ func TestHandlers(t *testing.T) {
 			chunked:   false,
 			code:      404,
 			expCode:   404,
-			expHeader: map[string]string{"Content-Length": "0"},
+			expHeader: map[string]string{"Content-Length": "0", "Connection": "close"},
 			files: []testFile{{
 				name:    "%s/not_exists_response_1.raw",
 				content: "",
@@ -623,7 +613,7 @@ func TestHandlers(t *testing.T) {
 				"data line #2\n",
 				"data line #3\n",
 			},
-			expHeader: map[string]string{"Transfer-Encoding": "chunked", "Connection": "close"},
+			expHeader: map[string]string{"Transfer-Encoding": "chunked"},
 			recAll:    false,
 		},
 	}
@@ -643,8 +633,8 @@ func TestHandlers(t *testing.T) {
 			if tc.chunked {
 				r.TransferEncoding = []string{"chunked"}
 			}
-			if tc.aEncoding {
-				r.Header.Add("Accept-Encoding", "gzip/deflate")
+			for k, v := range tc.headers {
+				r.Header.Add(k, v)
 			}
 			if tc.tEncoding {
 				r.TransferEncoding = []string{"chunked"}
@@ -775,6 +765,7 @@ type testHandler struct {
 func (th *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if th.handleFunc != nil {
 		th.handleFunc(w, r)
+		return
 	}
 	w.WriteHeader(th.code)
 	for k, v := range th.headers {
@@ -808,4 +799,62 @@ func cleanUp() {
 	cfg = []cfgValue{}
 	client = nil
 	cnt.reset()
+	forwardURL = ""
+	config = ""
+	dataDirName = ""
+	host = "localhost"
+	port = 8080
+	flushInterval = defaultFlushInterval
+}
+
+func execute(args string) string {
+	actual := new(bytes.Buffer)
+	rootCmd.SetOut(actual)
+	rootCmd.SetErr(actual)
+	rootCmd.SetArgs(strings.Split(args, " "))
+	rootCmd.Execute()
+	return actual.String()
+}
+
+func TestMainFunc(t *testing.T) {
+	msg := execute("-h")
+	require.Contains(t, msg, "Usage:")
+	require.Contains(t, msg, version)
+	msg = execute(" ")
+	require.Contains(t, msg, "Usage:")
+	msg = execute("-v")
+	require.Contains(t, msg, "Usage:")
+}
+
+func TestRootFunc(t *testing.T) {
+	cleanUp()
+	defer cleanUp()
+	cmd := &cobra.Command{}
+	config = "sample_data/config.json"
+	pid := syscall.Getpid()
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		t.Log("killing")
+		syscall.Kill(pid, syscall.SIGINT)
+		time.Sleep(5 * time.Millisecond)
+
+	}()
+	root(cmd, []string{})
+}
+
+func TestRootFunc2(t *testing.T) {
+	cleanUp()
+	defer cleanUp()
+	cmd := &cobra.Command{}
+	forwardURL = "http://www.example.com"
+	defer func() { os.Remove("www.example.com") }()
+	pid := syscall.Getpid()
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		t.Log("killing")
+		syscall.Kill(pid, syscall.SIGINT)
+		time.Sleep(5 * time.Millisecond)
+
+	}()
+	root(cmd, []string{})
 }

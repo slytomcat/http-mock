@@ -45,18 +45,18 @@ type cfgValue struct {
 }
 
 const (
-	delaySize = 25
+	delaySize            = 25
+	defaultFlushInterval = 10 * time.Millisecond
 )
 
 var (
-	version       = "local build"
+	version       = "local_build"
 	forwardURL    string
 	dataDirName   string
 	config        string
 	host          string
 	port          int
-	printVersion  bool
-	flushInterval = 10 * time.Millisecond
+	flushInterval = defaultFlushInterval
 	reURL         = regexp.MustCompile(`https?://(.*)$`)
 	filters       []filter
 	cnt           asyncCounter
@@ -64,20 +64,23 @@ var (
 	cfgLock       sync.Mutex
 	logger        = log.New(os.Stdout, "", log.LUTC|log.LstdFlags|log.Lmsgprefix)
 	client        *http.Client
-)
-
-func main() {
-	rootCmd := &cobra.Command{
+	rootCmd       = &cobra.Command{
 		Use:     "http-mock -c <config file path> | -f <URL for request forwarding>",
 		Short:   fmt.Sprintf("http-mock is proxy/mock service v. %s", version),
 		Run:     root,
 		Example: "http-mock -c config.json -p 8000\nor\nhttp-mock -f http://examle.com",
+		Version: version,
 	}
+)
+
+func init() {
 	rootCmd.Flags().StringVarP(&host, "host", "s", "localhost", "host to start service")
 	rootCmd.Flags().IntVarP(&port, "port", "p", 8080, "port to start service")
 	rootCmd.Flags().StringVarP(&forwardURL, "forward", "f", "", "URL for forwarding requests")
 	rootCmd.Flags().StringVarP(&config, "config", "c", "", "path to folder with config and responses")
-	rootCmd.Flags().BoolVarP(&printVersion, "version", "v", false, "print version and exit")
+}
+
+func main() {
 	rootCmd.Execute()
 }
 
@@ -128,10 +131,6 @@ func readConfig(path string) error {
 }
 
 func root(cmd *cobra.Command, _ []string) {
-	if printVersion {
-		fmt.Printf("http-mock v. %s\n", version)
-		os.Exit(0)
-	}
 	mux := http.NewServeMux()
 	switch {
 	case forwardURL != "":
@@ -159,7 +158,7 @@ func root(cmd *cobra.Command, _ []string) {
 		logger.SetPrefix("MOCK ")
 		logger.Printf("Starting MOCK server on %s:%d\n", host, port)
 	default:
-		fmt.Println("One of -c, -f, -h, or -v option have to be provided")
+		cmd.Println("One of -c, -f, -h, or -v option have to be provided")
 		cmd.Usage()
 		os.Exit(1)
 	}
@@ -168,7 +167,7 @@ func root(cmd *cobra.Command, _ []string) {
 		Handler: mux,
 	}
 	go func() { logger.Println(server.ListenAndServe()) }()
-	sig := make(chan (os.Signal), 1)
+	sig := make(chan (os.Signal), 3)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	s := <-sig // wait for a signal
 	logger.Printf("%s received. Starting shutdown...", s.String())
@@ -207,7 +206,6 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	request.Close = r.Close
 	for k, v := range r.Header {
 		if k != "Accept-Encoding" { // it will be automatically added by transport and the response will be automatically decompressed
 			request.Header.Add(k, strings.Join(v, " "))
@@ -226,9 +224,6 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		headers[k] = strings.Join(v, " ")
-	}
-	if resp.Close {
-		headers["Connection"] = "close"
 	}
 	// fmt.Printf("DEBUG:\nheaders: %v\nresp: %+v\n", headers, resp)
 	if len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {

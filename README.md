@@ -8,8 +8,8 @@ It can work in two modes:
 - `mock`: handle incoming requests from files according to the configuration file.
 
 In `proxy` mode each request creates:
-- new file file response data
-- new item in configuration
+- new file with the response data
+- new item in configuration for making response into `mock` mode
 
 A file is created in subfolder (of current path from witch the service was started) that corresponds to the forwarding URL. For example: the requests for forwarding URL: `http://www.example.com/test` will be stored in subfolder `www.example.com_test`.
 The files with response data will be saved in the subfolder and will contain the rest part of request URL in its name. For example: response of request to `http://localhost:8080/path/to/end-point?id=0` will be saved to file `<request_path_parameters>_response_<n>.raw` where `n` is unique number. Config file is stored with name `config.json` in the same subfolder. It is created when service is stopped.
@@ -17,7 +17,7 @@ The files with response data will be saved in the subfolder and will contain the
 As each request is handled individually the several requests to the same end-point even with the same parameters will be saved in separate files and the config will have several similar records. The requests handled in the almost same time maybe written in different order. But matching of the incoming request in `mock` mode is started from the first config record up to the end. That why it is highly recommended to review and change the config file created in `proxy` mode before using it in `mock` mode.    
 
 Responses' files may be stored in one of 2 formats:
-- just raw body of response (the content of file is uncompressed even if client sent `Content-Encoding: gzip` into request header)
+- just raw body of response (the content of file is uncompressed even if the requester sent `Accept-Encoding: gzip` into request header)
 - special format for chunked responses (with the `Transfer-Encoding: chunked` in the response header).
 
 The format of chunked response file is described in the section [below](#chunked-response-file-format). 
@@ -39,7 +39,7 @@ or clone/download repository source and build it by
 ```
 ./build.sh
 ```
-executed from the repo folder. You need Golang v.1.20 or higher to build the binary. Also the `build.sh` uses `upx` utility to compact the binary. 
+executed from the repo folder. You need Golang v.1.20 or higher to build the binary. Also the `build.sh` uses `upx` utility to compact the binary but You may skip this step by commenting or removing the line with `upc` call. 
 
 ## use in proxy mode
 
@@ -110,12 +110,12 @@ Config example:
     }
 ]
 ```
-When the service handles new request in `mock` mode the request is checked starting from the first record in config until it matched the record criteria. The record where match happened then used for making response. When no one config records matched the incoming request then `HTTP 402 Not found` is returned with empty response body. 
+When the service handles new request in `mock` mode the request is checked starting from the first record in config until it matched the record criteria. The first record where match happened is used for making response. When no one config records matched the incoming request then `HTTP 402 Not found` is returned with empty response body. 
 
 The matching criteria is: `re` match the request path with parameters AND either `body-re` match body OR `body-hash` is equal to sha256 hash-sum (in HEX format) of the request body content.
 
 If request is maid with all parameters in the request URL (typical for GET requests) then only `re` matching works while default values for `body-re` and `body-hash` will match an empty body.
-When all request parameters are sent into the request body (typical for POST requests) then config record parameters `body-re` and `body-hash` can be used for specifying the response. You can use one of it leaving another with default value (that will not match any non-empty body).
+When all or part of the request parameters are sent into the request body (typical for POST requests) then config record parameters `body-re` and `body-hash` can be used for specifying the response. You can use one of it leaving another with default value (that will not match any non-empty body).
 
 ## chunked response file format
 For responses in chunked mode the file have to be in special format. Example:

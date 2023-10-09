@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -207,9 +208,10 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for k, v := range r.Header {
-		if k != "Accept-Encoding" { // it will be automatically added by transport and the response will be automatically decompressed
-			request.Header.Add(k, strings.Join(v, " "))
+		if k == "Accept-Encoding" { // it will be automatically added by transport and the response will be automatically decompressed
+			continue
 		}
+		request.Header.Add(k, strings.Join(v, " "))
 	}
 	bodyHash := getBodyHash(body)
 	// perform forwarding request
@@ -222,8 +224,14 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	// extract the response header
 	headers := map[string]string{}
+	compressResponse := false
 	for k, v := range resp.Header {
-		headers[k] = strings.Join(v, " ")
+		value := strings.Join(v, ", ")
+		if k == "Content-Encoding" && strings.Contains(value, "gzip") {
+			compressResponse = true
+			continue // it will be restored in case of successful compression
+		}
+		headers[k] = value
 	}
 	// fmt.Printf("DEBUG:\nheaders: %v\nresp: %+v\n", headers, resp)
 	if len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
@@ -262,16 +270,43 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	} else { // conventional response
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
-			logger.Printf("ProxyHandler: reading response body ")
+			logger.Printf("ProxyHandler: reading response body error: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+		compressed := []byte{}
+		if compressResponse {
+			if compressed, err = compress(data); err != nil {
+				logger.Printf("ProxyHandler: skipped compressing body due to error while data compression: %v", err)
+			} else {
+				headers["Content-Encoding"] = "gzip"
+			}
 		}
 		go storeData(fileName, data, headers, url, resp.StatusCode, bodyHash) // write data to file and store config value in separate routine
 		// replay response to the requestor
 		sendHeaders(w.Header(), headers)
 		w.WriteHeader(resp.StatusCode)
-		w.Write(data)
+		if compressResponse && len(compressed) > 0 {
+			w.Write(compressed)
+		} else {
+			w.Write(data)
+		}
 	}
+}
+
+func compress(data []byte) ([]byte, error) {
+	compressed := bytes.NewBuffer([]byte{})
+	compressor, err := gzip.NewWriterLevel(compressed, gzip.BestSpeed)
+	if err != nil {
+		return nil, fmt.Errorf("gzip writer creation error: %v", err)
+	}
+	if _, err = compressor.Write(data); err != nil {
+		return nil, fmt.Errorf("writing data into gzip writer error: %v", err)
+	}
+	if err = compressor.Close(); err != nil {
+		return nil, fmt.Errorf("closing gzip writer error: %v", err)
+	}
+	return compressed.Bytes(), nil
 }
 
 // write headers data to ResponseWriter header cache
@@ -419,6 +454,14 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 		if c.re.MatchString(url) && (c.bodyHash == bodyHash || c.bodyRe.Match(body)) {
 			found = true
 			logger.Printf("%s %s %s from %s in mock mode, response file: %s", r.Proto, r.Method, url, r.RemoteAddr, c.path)
+			compressResponse := false
+			for k, v := range c.headers {
+				if k == "Content-Encoding" && strings.Contains(v, "gzip") {
+					compressResponse = true
+					continue // it will be restored in case of successful compression
+				}
+				w.Header().Add(k, v)
+			}
 			sendHeaders(w.Header(), c.headers)
 			// fmt.Printf("DEBUG:\ncfg: %+v\n", c)
 			if c.stream { // streamed response
@@ -461,8 +504,13 @@ func MockHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				w.WriteHeader(c.code)
 				if len(data) > 0 {
-					_, err = w.Write(data)
-					if err != nil {
+					if compressResponse {
+						if compressed, err := compress(data); err == nil {
+							data = compressed
+							w.Header().Add("Content-Encoding", "gzip")
+						}
+					}
+					if _, err = w.Write(data); err != nil {
 						writeResponseError(err, w, url)
 						return
 					}

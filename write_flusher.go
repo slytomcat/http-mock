@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync"
@@ -9,23 +10,27 @@ import (
 
 // CachedWriteFlusher is special io.WriteCloser for cache writing
 type CachedWriteFlusher struct {
+	ctx    context.Context
 	input  chan []byte
 	closed bool
 	lock   sync.Mutex
 }
 
-// NewCachedWritCloserFlusher creates io.WriteCloser that pass data via channel buffer.
-func NewCachedWritCloserFlusher(in io.Writer, logPrefix string, flushFunc func()) io.WriteCloser {
+// NewCachedWritFlusher creates io.WriteCloser that pass data via channel buffer.
+func NewCachedWritFlusher(in io.Writer, logPrefix string, flushFunc func(), interval time.Duration) io.WriteCloser {
 	input := make(chan []byte, 1024)
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &CachedWriteFlusher{
+		ctx:   ctx,
 		input: input,
 	}
 	go func() {
-		ticker := time.NewTicker(flushInterval)
+		ticker := time.NewTicker(interval)
 		defer func() {
 			if flushFunc != nil {
 				ticker.Stop()
 			}
+			cancel()
 		}()
 		for {
 			select {
@@ -43,9 +48,6 @@ func NewCachedWritCloserFlusher(in io.Writer, logPrefix string, flushFunc func()
 					} // drain input
 					if flushFunc != nil {
 						ticker.Stop()
-						for len(ticker.C) > 0 {
-							<-ticker.C
-						}
 						flushFunc = nil
 					}
 					return
@@ -71,6 +73,9 @@ func (c *CachedWriteFlusher) Write(data []byte) (int, error) {
 
 // Close underlying file
 func (c *CachedWriteFlusher) Close() error {
+	defer func() {
+		<-c.ctx.Done() // wait for writing end
+	}()
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	if c.closed {
@@ -78,6 +83,5 @@ func (c *CachedWriteFlusher) Close() error {
 	}
 	c.closed = true
 	close(c.input)
-
 	return nil
 }

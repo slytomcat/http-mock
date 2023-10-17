@@ -33,11 +33,11 @@ var (
 type Response struct {
 	ID       string            `json:"id,omitempty"`
 	URL      string            `json:"url,omitempty"`
-	Body     []byte            `json:"body,omitempty"`
+	Body     string            `json:"body,omitempty"`
 	Code     int               `json:"code,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	Chunked  bool              `json:"chunked,omitempty"`
-	Response []byte            `json:"response,omitempty"`
+	Response string            `json:"response,omitempty"`
 }
 
 // Handler is
@@ -104,13 +104,6 @@ func (h *Handler) parseConfig(data []byte) error {
 		return fmt.Errorf("forward URL parsing error: %v", err)
 	}
 	responses := make(map[[32]byte]Response, len(cfg.Responses))
-	for i, r := range cfg.Responses {
-		key := h.makeKey(r.URL, r.Body)
-		if _, ok := responses[key]; ok {
-			return fmt.Errorf("record #%d is duplicate with one of previous", i)
-		}
-		responses[key] = r
-	}
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.host = cfg.Host
@@ -120,6 +113,14 @@ func (h *Handler) parseConfig(data []byte) error {
 	h.bodyRe = bodyRe
 	h.forwardURL = cfg.ForwardURL
 	h.responses = responses
+	for i, r := range cfg.Responses {
+		key := h.makeKey(r.URL, r.Body)
+		if _, ok := responses[key]; ok {
+			return fmt.Errorf("record #%d is duplicate with one of previous", i)
+		}
+		r.ID = fmt.Sprintf("%X", key)
+		responses[key] = r
+	}
 	return nil
 }
 
@@ -165,7 +166,7 @@ func (h *Handler) Start() error {
 	go func() { errCh <- h.server.ListenAndServe() }()
 	logger.Printf("Starting handler%s on %s:%d\n", forMsg, h.host, h.port)
 	select {
-	case <-time.After(30 * time.Microsecond):
+	case <-time.After(100 * time.Microsecond):
 		return nil
 	case err := <-errCh:
 		return err
@@ -243,7 +244,7 @@ func (h *Handler) parseKey(sKey string) (*[32]byte, error) {
 	}
 
 	key := make([]byte, 32, 32)
-	_, err := hex.Decode([]byte(sKey), key)
+	_, err := hex.Decode(key, []byte(sKey))
 	if err != nil {
 		return nil, fmt.Errorf("parsing update.ID error: %v", err)
 	}
@@ -263,13 +264,13 @@ func (h *Handler) DeleteResponse(sID string) error {
 	return nil
 }
 
-func (h *Handler) makeKey(url string, body []byte) [32]byte {
-	u := h.urlRe.Find([]byte(url))
-	b := h.bodyRe.FindAll(body, -1)
-	return sha256.Sum256(append(u, bytes.Join(b, []byte{})...))
+func (h *Handler) makeKey(url string, body string) [32]byte {
+	u := h.urlRe.FindString(url)
+	b := h.bodyRe.FindAllString(body, -1)
+	return sha256.Sum256([]byte(u + strings.Join(b, "")))
 }
 
-func requestData(r *http.Request) (string, map[string]string, []byte, error) {
+func requestData(r *http.Request) (string, map[string]string, string, error) {
 	defer r.Body.Close()
 	url := r.URL.String()
 	headers := make(map[string]string, len(r.Header))
@@ -278,11 +279,12 @@ func requestData(r *http.Request) (string, map[string]string, []byte, error) {
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return url, headers, nil, fmt.Errorf("reading body error: %s", err)
+		return url, headers, "", fmt.Errorf("reading body error: %s", err)
 	}
-	return url, headers, body, nil
+	return url, headers, string(body), nil
 }
 
+// handle is http handler func for handler server
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	url, headers, body, err := requestData(r)
 	if err != nil {
@@ -298,19 +300,19 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	passthrough := h.forwardURL != "" && h.passthroughRe.Match(append([]byte(url), body...))
-	if ok && passthrough {
+	if ok && !passthrough {
 		if response.Chunked {
 			sendChunkedResponse(response, w)
+		} else {
+			sendSimpleResponse(response, w)
 		}
-		sendSimpleResponse(response, w)
 	} else {
 		h.handleForward(passthrough, r.Method, url, headers, body, key, w)
 	}
 }
 
 func sendSimpleResponse(response Response, w http.ResponseWriter) {
-	w.WriteHeader(response.Code)
-	body := response.Response
+	body := []byte(response.Response)
 	for k, v := range response.Headers {
 		w.Header().Add(k, v)
 		if k == "Content-Encoding" && v == "gzip" {
@@ -322,6 +324,7 @@ func sendSimpleResponse(response Response, w http.ResponseWriter) {
 		}
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	w.WriteHeader(response.Code)
 	w.Write(body)
 }
 
@@ -340,8 +343,8 @@ func compress(data []byte) ([]byte, error) {
 	return compressed.Bytes(), nil
 }
 
-func (h *Handler) handleForward(passthrough bool, method, url string, headers map[string]string, body []byte, key [32]byte, w http.ResponseWriter) {
-	request, _ := http.NewRequest(method, h.forwardURL+url, bytes.NewReader(body))
+func (h *Handler) handleForward(passthrough bool, method, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
+	request, _ := http.NewRequest(method, h.forwardURL+url, bytes.NewReader([]byte(body)))
 	supportCompression := false
 	for k, v := range headers {
 		if k == "Accept-Encoding" { // it will be automatically added by transport and the response will be automatically decompressed
@@ -352,6 +355,8 @@ func (h *Handler) handleForward(passthrough bool, method, url string, headers ma
 	}
 	resp, err := client.Do(request)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 	defer resp.Body.Close()
 	headers = map[string]string{}
@@ -361,7 +366,7 @@ func (h *Handler) handleForward(passthrough bool, method, url string, headers ma
 	if len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
 		h.handleChunkedResponse(passthrough, resp, url, headers, body, key, w)
 	} else {
-		body, err = io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 		}
 		if resp.Uncompressed && supportCompression {
@@ -373,7 +378,7 @@ func (h *Handler) handleForward(passthrough bool, method, url string, headers ma
 			Code:     resp.StatusCode,
 			Headers:  headers,
 			Chunked:  false,
-			Response: body,
+			Response: string(respBody),
 		}
 		if !passthrough {
 			h.lock.Lock()
@@ -385,30 +390,30 @@ func (h *Handler) handleForward(passthrough bool, method, url string, headers ma
 }
 
 func sendChunkedResponse(response Response, w http.ResponseWriter) {
-	w.WriteHeader(response.Code)
 	sendHeaders(w.Header(), response.Headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
-	scanner := bufio.NewScanner(bytes.NewReader(response.Response))
+	w.WriteHeader(response.Code)
+	scanner := bufio.NewScanner(bytes.NewReader([]byte(response.Response)))
 	responseWriter := NewCachedWritFlusher(w, "Client response writer", w.(http.Flusher).Flush, flushInterval)
 	defer responseWriter.Close()
 	for scanner.Scan() {
 		line := scanner.Text()
 		delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
 		if err != nil {
-			logger.Print("")
+			logger.Print("") // todo
 			return
 		}
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 		_, err = responseWriter.Write([]byte(line[delaySize+1:] + "\n"))
 		if err != nil {
-			logger.Print("")
+			logger.Print("") // todo
 			return
 		}
 	}
 
 }
 
-func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, url string, headers map[string]string, body []byte, key [32]byte, w http.ResponseWriter) {
+func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
 	tick := time.Now()
 	scanner := bufio.NewScanner(resp.Body)
 	respBody := bytes.NewBuffer([]byte{})
@@ -443,7 +448,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 		Code:     resp.StatusCode,
 		Headers:  headers,
 		Chunked:  true,
-		Response: respBody.Bytes(),
+		Response: respBody.String(),
 	}
 	h.lock.Lock()
 	h.responses[key] = response

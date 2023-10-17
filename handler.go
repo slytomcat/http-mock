@@ -21,13 +21,12 @@ import (
 )
 
 const (
-	delaySize     = 25
-	flushInterval = 10 * time.Millisecond
+	delaySize       = 25
+	flushInterval   = 10 * time.Millisecond
+	minCompressSize = 512
 )
 
-var (
-	client = http.DefaultClient
-)
+var client = http.DefaultClient
 
 // Response is the single response storage item
 type Response struct {
@@ -83,9 +82,11 @@ func makeRe(re string) (*regexp.Regexp, error) {
 
 func (h *Handler) parseConfig(data []byte) error {
 	cfg := &Config{}
-	err := json.Unmarshal(data, cfg)
-	if err != nil {
+	if err := json.Unmarshal(data, cfg); err != nil {
 		return fmt.Errorf("json parsing error: %v", err)
+	}
+	if cfg.Port == 0 {
+		return fmt.Errorf("port is 0 but it have to set to value bigger than 1000")
 	}
 	URLRe, err := makeRe(cfg.URLRe)
 	if err != nil {
@@ -242,7 +243,6 @@ func (h *Handler) parseKey(sKey string) (*[32]byte, error) {
 	if len(sKey) != 64 {
 		return nil, fmt.Errorf("update contain ID with wrong length")
 	}
-
 	key := make([]byte, 32, 32)
 	_, err := hex.Decode(key, []byte(sKey))
 	if err != nil {
@@ -314,14 +314,15 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 func sendSimpleResponse(response Response, w http.ResponseWriter) {
 	body := []byte(response.Response)
 	for k, v := range response.Headers {
-		w.Header().Add(k, v)
-		if k == "Content-Encoding" && v == "gzip" {
+		if k == "Content-Encoding" && strings.Contains(v, "gzip") && len(body) > minCompressSize {
 			if compressed, err := compress(body); err != nil {
 				logger.Printf("response body compression error: %v\n", err)
+				continue
 			} else {
 				body = compressed
 			}
 		}
+		w.Header().Set(k, v)
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	w.WriteHeader(response.Code)
@@ -400,13 +401,13 @@ func sendChunkedResponse(response Response, w http.ResponseWriter) {
 		line := scanner.Text()
 		delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
 		if err != nil {
-			logger.Print("") // todo
+			logger.Printf("error parsing chunked file: %s\n", err)
 			return
 		}
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 		_, err = responseWriter.Write([]byte(line[delaySize+1:] + "\n"))
 		if err != nil {
-			logger.Print("") // todo
+			logger.Printf("error writing to responseWriter: %v\n", err) // todo
 			return
 		}
 	}
@@ -414,27 +415,35 @@ func sendChunkedResponse(response Response, w http.ResponseWriter) {
 }
 
 func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
-	tick := time.Now()
-	scanner := bufio.NewScanner(resp.Body)
+	reader := bufio.NewReader(resp.Body)
 	respBody := bytes.NewBuffer([]byte{})
-	responseWriter := NewCachedWritFlusher(w, "Client response writer", w.(http.Flusher).Flush, flushInterval)
-	defer responseWriter.Close()
 	sendHeaders(w.Header(), headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(resp.StatusCode)
-	for scanner.Scan() {
+	responseWriter := NewCachedWritFlusher(w, "Client response writer", w.(http.Flusher).Flush, flushInterval)
+	defer responseWriter.Close()
+	tick := time.Now()
+	for {
+		chunk, _, err := reader.ReadLine()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				logger.Printf("Handler: reading response error: %s", err)
+			}
+			break
+		}
 		now := time.Now()
 		delay := now.Sub(tick)
+		// fmt.Printf("     %v\n", delay)
 		tick = now
-		chunk := append(scanner.Bytes(), '\n')
 		// replay chunk to requester
+		chunk = append(chunk, '\n')
 		if _, err := responseWriter.Write(chunk); err != nil {
-			logger.Printf("ProxyHandler: writing response to responseWriter error: %s", err)
+			logger.Printf("Handler: writing response to responseWriter error: %s", err)
 			break
 		}
 		if !passthrough {
 			if _, err := respBody.Write(formatChink(delay, chunk)); err != nil {
-				logger.Printf("ProxyHandler: writing response to buffer error: %s", err)
+				logger.Printf("Handler: writing response to buffer error: %s", err)
 				break
 			}
 		}

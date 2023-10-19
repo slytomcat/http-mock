@@ -18,10 +18,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
-	delaySize       = 25
+	delaySize       = 12
 	flushInterval   = 10 * time.Millisecond
 	minCompressSize = 512
 )
@@ -41,6 +43,7 @@ type Response struct {
 
 // Handler is
 type Handler struct {
+	id            string //todo
 	host          string
 	port          int
 	forwardURL    string
@@ -54,6 +57,7 @@ type Handler struct {
 
 // Config is struct for Handler configuration
 type Config struct {
+	ID            string
 	Host          string     `json:"host"`
 	Port          int        `json:"port"`
 	ForwardURL    string     `json:"forward-url"`
@@ -70,14 +74,20 @@ func NewHandler(cfg []byte) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config parsing error: %v", err)
 	}
+	idSrc, err := uuid.NewRandom()
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error while id creation: %v", err)
+	}
+	id := idSrc.String()
+	h.id = id[len(id)-12:]
 	return h, nil
 }
 
-func makeRe(re string) (*regexp.Regexp, error) {
+func makeRe(re, defaultRe string) (*regexp.Regexp, error) {
 	if re != "" {
 		return regexp.Compile(re)
 	}
-	return regexp.Compile("^$")
+	return regexp.Compile(defaultRe)
 }
 
 func (h *Handler) parseConfig(data []byte) error {
@@ -88,15 +98,15 @@ func (h *Handler) parseConfig(data []byte) error {
 	if cfg.Port == 0 {
 		return fmt.Errorf("port is 0 but it have to set to value bigger than 1000")
 	}
-	URLRe, err := makeRe(cfg.URLRe)
+	URLRe, err := makeRe(cfg.URLRe, "^.*$")
 	if err != nil {
 		return fmt.Errorf("URL regexp compiling error: %v", err)
 	}
-	bodyRe, err := makeRe(cfg.BodyRe)
+	bodyRe, err := makeRe(cfg.BodyRe, "^.*$")
 	if err != nil {
 		return fmt.Errorf("body regexp compiling error: %v", err)
 	}
-	passthroughRe, err := makeRe(cfg.PassthroughRe)
+	passthroughRe, err := makeRe(cfg.PassthroughRe, "^$")
 	if err != nil {
 		return fmt.Errorf("passthrough regexp compiling error: %v", err)
 	}
@@ -127,14 +137,15 @@ func (h *Handler) parseConfig(data []byte) error {
 
 // GetConfig returns Handler config
 func (h *Handler) GetConfig() []byte {
-	responses := make([]Response, 0, len(h.responses))
 	h.lock.RLock()
 	defer h.lock.RUnlock()
+	responses := make([]Response, 0, len(h.responses))
 	for k, v := range h.responses {
 		v.ID = fmt.Sprintf("%X", k)
 		responses = append(responses, v)
 	}
 	c, _ := json.Marshal(Config{
+		ID:            h.id,
 		Host:          h.host,
 		Port:          h.port,
 		PassthroughRe: h.passthroughRe.String(),
@@ -151,7 +162,7 @@ func (h *Handler) Start() error {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	if h.server != nil {
-		return errors.New("handler already started")
+		return fmt.Errorf("%s handler already started", h.id)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.handle)
@@ -165,9 +176,9 @@ func (h *Handler) Start() error {
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- h.server.ListenAndServe() }()
-	logger.Printf("Starting handler%s on %s:%d\n", forMsg, h.host, h.port)
+	logger.Printf("%s starting handler%s on %s:%d\n", h.id, forMsg, h.host, h.port)
 	select {
-	case <-time.After(100 * time.Microsecond):
+	case <-time.After(time.Millisecond):
 		return nil
 	case err := <-errCh:
 		return err
@@ -178,20 +189,21 @@ func (h *Handler) Start() error {
 func (h *Handler) Stop() error {
 	h.lock.Lock()
 	defer h.lock.Unlock()
-	if h.server == nil {
-		return errors.New("handler already stopped")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-	defer cancel()
-	err := h.server.Shutdown(ctx)
-	if err != nil {
-		return fmt.Errorf("handler for %s on %s:%d stopping error:%v", h.forwardURL, h.host, h.port, err)
-	}
 	forMsg := ""
 	if h.forwardURL != "" {
 		forMsg = " for " + h.forwardURL
 	}
-	logger.Printf("Handler%s on %s:%d finished.", forMsg, h.host, h.port)
+	if h.server == nil {
+		return fmt.Errorf("%s handler already stopped", h.id)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	err := h.server.Shutdown(ctx)
+	if err != nil {
+		h.server.Close()
+		return fmt.Errorf("%s handler%s for %s on %s:%d stopping error:%v", h.id, forMsg, h.forwardURL, h.host, h.port, err)
+	}
+	logger.Printf("%s handler%s on %s:%d finished.", h.id, forMsg, h.host, h.port)
 	h.server = nil
 	return nil
 }
@@ -301,22 +313,30 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	passthrough := h.forwardURL != "" && h.passthroughRe.Match(append([]byte(url), body...))
 	if ok && !passthrough {
+		// reply mode
+		logger.Printf("%s %s %s body='%s' replay by resp id=%s", h.id, r.Method, url, body, fmt.Sprintf("%X", key))
 		if response.Chunked {
-			sendChunkedResponse(response, w)
+			h.sendChunkedResponse(response, w)
 		} else {
-			sendSimpleResponse(response, w)
+			h.sendSimpleResponse(response, w)
 		}
 	} else {
-		h.handleForward(passthrough, r.Method, url, headers, body, key, w)
+		// record/passthrough mode
+		if passthrough {
+			logger.Printf("%s %s %s body='%s' passthrough mode", h.id, r.Method, url, body)
+		} else {
+			logger.Printf("%s %s %s body='%s' store mode, id=%s", h.id, r.Method, url, body, fmt.Sprintf("%X", key))
+		}
+		h.handleForward(passthrough, r, url, headers, body, key, w)
 	}
 }
 
-func sendSimpleResponse(response Response, w http.ResponseWriter) {
+func (h *Handler) sendSimpleResponse(response Response, w http.ResponseWriter) {
 	body := []byte(response.Response)
 	for k, v := range response.Headers {
 		if k == "Content-Encoding" && strings.Contains(v, "gzip") && len(body) > minCompressSize {
 			if compressed, err := compress(body); err != nil {
-				logger.Printf("response body compression error: %v\n", err)
+				logger.Printf("%s response body compression error: %v\n", h.id, err)
 				continue
 			} else {
 				body = compressed
@@ -344,8 +364,16 @@ func compress(data []byte) ([]byte, error) {
 	return compressed.Bytes(), nil
 }
 
-func (h *Handler) handleForward(passthrough bool, method, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
-	request, _ := http.NewRequest(method, h.forwardURL+url, bytes.NewReader([]byte(body)))
+func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if r.Context() == nil {
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithCancel(r.Context())
+	}
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, r.Method, h.forwardURL+url, bytes.NewReader([]byte(body)))
 	supportCompression := false
 	for k, v := range headers {
 		if k == "Accept-Encoding" { // it will be automatically added by transport and the response will be automatically decompressed
@@ -386,32 +414,31 @@ func (h *Handler) handleForward(passthrough bool, method, url string, headers ma
 			h.responses[key] = response
 			h.lock.Unlock()
 		}
-		sendSimpleResponse(response, w)
+		h.sendSimpleResponse(response, w)
 	}
 }
 
-func sendChunkedResponse(response Response, w http.ResponseWriter) {
+func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) {
 	sendHeaders(w.Header(), response.Headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(response.Code)
 	scanner := bufio.NewScanner(bytes.NewReader([]byte(response.Response)))
-	responseWriter := NewCachedWritFlusher(w, "Client response writer", w.(http.Flusher).Flush, flushInterval)
+	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
 	defer responseWriter.Close()
 	for scanner.Scan() {
 		line := scanner.Text()
 		delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
 		if err != nil {
-			logger.Printf("error parsing chunked file: %s\n", err)
+			logger.Printf("%s error parsing chunked file: %s\n", h.id, err)
 			return
 		}
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 		_, err = responseWriter.Write([]byte(line[delaySize+1:] + "\n"))
 		if err != nil {
-			logger.Printf("error writing to responseWriter: %v\n", err) // todo
+			logger.Printf("%s error writing to responseWriter: %v\n", h.id, err) // todo
 			return
 		}
 	}
-
 }
 
 func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
@@ -420,30 +447,30 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 	sendHeaders(w.Header(), headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(resp.StatusCode)
-	responseWriter := NewCachedWritFlusher(w, "Client response writer", w.(http.Flusher).Flush, flushInterval)
+	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
 	defer responseWriter.Close()
 	tick := time.Now()
 	for {
 		chunk, _, err := reader.ReadLine()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				logger.Printf("Handler: reading response error: %s", err)
+				logger.Printf("%s reading response error: %s", h.id, err)
 			}
 			break
 		}
 		now := time.Now()
 		delay := now.Sub(tick)
-		// fmt.Printf("     %v\n", delay)
 		tick = now
 		// replay chunk to requester
-		chunk = append(chunk, '\n')
-		if _, err := responseWriter.Write(chunk); err != nil {
-			logger.Printf("Handler: writing response to responseWriter error: %s", err)
+		data := append(bytes.Clone(chunk), '\n') // make data clone to avoid data racing
+		// logger.Printf("Handler     :%v <- '%s'\n", delay, data[:len(data)-1])
+		if _, err := responseWriter.Write(data); err != nil {
+			logger.Printf("%s writing response to responseWriter error: %s", h.id, err)
 			break
 		}
 		if !passthrough {
-			if _, err := respBody.Write(formatChink(delay, chunk)); err != nil {
-				logger.Printf("Handler: writing response to buffer error: %s", err)
+			if _, err := respBody.Write(formatChink(delay, data)); err != nil {
+				logger.Printf("%s writing response to buffer error: %s", h.id, err)
 				break
 			}
 		}
@@ -474,6 +501,6 @@ func sendHeaders(w http.Header, headers map[string]string) {
 // format chunk data part
 func formatChink(delay time.Duration, data []byte) []byte {
 	delayStr := strconv.FormatInt(delay.Milliseconds(), 10)
-	spacer := "                         "[:delaySize-len(delayStr)]
-	return append([]byte(spacer+delayStr+"|"), string(data)...)
+	spacer := "            "[:delaySize-len(delayStr)]
+	return append([]byte(spacer+delayStr+"|"), data...)
 }

@@ -16,8 +16,8 @@ type CachedWriteFlusher struct {
 	lock   sync.Mutex
 }
 
-// NewCachedWritFlusher creates io.WriteCloser that pass data via channel buffer.
-func NewCachedWritFlusher(in io.Writer, logPrefix string, flushFunc func(), interval time.Duration) io.WriteCloser {
+// NewCachedWriteFlusher creates io.WriteCloser that pass data via channel buffer.
+func NewCachedWriteFlusher(in io.Writer, logPrefix string, flushFunc func(), interval time.Duration) io.WriteCloser {
 	input := make(chan []byte, 1024)
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &CachedWriteFlusher{
@@ -52,6 +52,7 @@ func NewCachedWritFlusher(in io.Writer, logPrefix string, flushFunc func(), inte
 					}
 					return
 				}
+				// logger.Printf("WriteFlusher:<- '%s'\n", data[:len(data)-1])
 			case <-ticker.C:
 				flushFunc()
 			}

@@ -15,7 +15,7 @@ var messages = [][]byte{[]byte("S0"), []byte("S1"), []byte("S2"), []byte("S3"), 
 func TestCachedWritCloser(t *testing.T) {
 	mock := NewMockWriter()
 	flushInterval := 5 * time.Millisecond
-	wc := NewCachedWritFlusher(mock, "", mock.Flush, flushInterval)
+	wc := NewCachedWriteFlusher(mock, "", mock.Flush, flushInterval)
 	length := len(messages)
 	// slow
 	for i := 0; i < length; i++ {
@@ -55,7 +55,7 @@ func TestCachedWritCloser(t *testing.T) {
 func TestCachedWritCloserErrors(t *testing.T) {
 	tError := errors.New("test error")
 	mock := NewMockWriter()
-	wc := NewCachedWritFlusher(mock, "", mock.Flush, time.Hour)
+	wc := NewCachedWriteFlusher(mock, "", mock.Flush, time.Hour)
 	mock.closeFunc = func() error {
 		return tError
 	}
@@ -69,7 +69,7 @@ func TestCachedWritCloserErrors(t *testing.T) {
 	require.Equal(t, data, <-mock.Written)
 	require.False(t, mock.isClosed())
 	mock = NewMockWriter()
-	wc = NewCachedWritFlusher(mock, "", mock.Flush, time.Hour)
+	wc = NewCachedWriteFlusher(mock, "", mock.Flush, time.Hour)
 	mock.writeFunc = func([]byte) (int, error) {
 		return 0, tError
 	}

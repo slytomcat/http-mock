@@ -19,13 +19,13 @@ var (
 	dataDirName string
 	cmdHost     string
 	cmdPort     int
-	logger      = log.New(os.Stdout, "", log.LUTC|log.LstdFlags|log.Lmsgprefix)
+	logger      = log.New(os.Stdout, "", log.LUTC|log.LstdFlags|log.Lmicroseconds|log.Lmsgprefix)
 	handlers    = map[string]*Handler{}
 	rootCmd     = &cobra.Command{
-		Use:     "http-mock -c <config file path> | -f <URL for request forwarding>",
+		Use:     "http-mock -s localhost -p 8080",
 		Short:   fmt.Sprintf("http-mock is proxy/mock service v. %s", version),
 		Run:     root,
-		Example: "http-mock -c config.json -p 8000\nor\nhttp-mock -f http://examle.com",
+		Example: "http-mock",
 		Version: version,
 	}
 )
@@ -48,6 +48,7 @@ func root(cmd *cobra.Command, _ []string) {
 		Handler: mux,
 	}
 	go func() { logger.Println(server.ListenAndServe()) }()
+	logger.Printf("Starting the management service on %s\n", server.Addr)
 	sig := make(chan (os.Signal), 3)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	s := <-sig // wait for a signal
@@ -59,6 +60,9 @@ func root(cmd *cobra.Command, _ []string) {
 		logger.Printf("Shutdown error:%v", err)
 	}
 	logger.Println("Shutdown finished.")
+	for _, h := range handlers {
+		h.Stop()
+	}
 }
 
 func handleCommands(w http.ResponseWriter, r *http.Request) {
@@ -69,20 +73,19 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method + r.URL.Path {
 	case "GET/new":
-		id := ""
 		handler, err := NewHandler(body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		handlers[id] = handler
+		handlers[handler.id] = handler
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf(`{"id": "%s"}`, id)))
+		w.Write([]byte(fmt.Sprintf(`{"id": "%s"}`, handler.id)))
 	case "PATCH/start":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if err := h.Start(); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
@@ -113,7 +116,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if err := h.Stop(); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			w.WriteHeader(http.StatusOK)

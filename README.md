@@ -30,12 +30,14 @@ or clone/download repository source and build it by
 ```
 executed from the repo folder. You need Golang v.1.20 or higher to build the binary. Also the `build.sh` uses `upx` utility to compact the binary but You may skip this step by commenting or removing the line with `upc` call. 
 
-## use 
+## usage
 
 ```
 http-mock  
 ```
 It will start management service on `localhost:8080`.
+
+Or you may get the docker image from github TO-DO: make CI for docker and provide link here
 
 ## options
 

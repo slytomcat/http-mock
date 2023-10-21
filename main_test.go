@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -19,26 +20,34 @@ const (
 	notExistingPath = "/notExists/path"
 )
 
-func cleanUp() {
-	dataDirName = ""
-	cmdHost = "localhost"
-	cmdPort = 8080
-	rootCmd = &cobra.Command{
-		Use:     "http-mock -s localhost -p 8080",
-		Short:   fmt.Sprintf("http-mock is proxy/mock service v. %s", version),
-		Run:     root,
-		Example: "http-mock",
-		Version: version,
+func cleanUp() func() {
+	storedDataDirName := dataDirName
+	storedCmdHost := cmdHost
+	storedCmdPort := cmdPort
+	storedHandlers := handlers
+	return func() {
+		dataDirName = storedDataDirName
+		cmdHost = storedCmdHost
+		cmdPort = storedCmdPort
+		rootCmd = &cobra.Command{
+			Use:     "http-mock -s localhost -p 8080",
+			Short:   fmt.Sprintf("http-mock is proxy/mock service v. %s", version),
+			Run:     root,
+			Example: "http-mock",
+			Version: version,
+		}
+		handlers = storedHandlers
+		_ = os.RemoveAll(dataDirName)
 	}
 }
 
 func execute(args string) string {
+	defer cleanUp()()
 	actual := new(bytes.Buffer)
 	rootCmd.SetOut(actual)
 	rootCmd.SetErr(actual)
 	rootCmd.SetArgs(strings.Split(args, " "))
-	rootCmd.Execute()
-
+	main()
 	return actual.String()
 }
 
@@ -65,66 +74,64 @@ func TestRootFunc(t *testing.T) {
 }
 
 func TestService(t *testing.T) {
-	cleanUp()
-	defer cleanUp()
 	msg := make(chan string, 1)
 	go func() {
 		msg <- execute("")
 	}()
 	defer func() {
-		killIt(100 * time.Millisecond)
+		killIt(time.Millisecond)
 		t.Log(<-msg)
 	}()
 	time.Sleep(50 * time.Millisecond)
 
-	resp, body, err := executeRequest(http.MethodGet, "http://localhost:8080/new", nil)
+	resp, body, err := executeRequest(http.MethodPost, "http://localhost:8080/new", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	require.Empty(t, body)
-	resp, body, err = executeRequest(http.MethodGet, "http://localhost:8080/new", bytes.NewReader([]byte(`}`)))
+	resp, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", bytes.NewReader([]byte(`}`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	resp, body, err = executeRequest(http.MethodGet, "http://localhost:8080/new", bytes.NewReader([]byte(`{"host": "localhost","port":8090}`)))
+	resp, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", bytes.NewReader([]byte(`{"host": "localhost","port":8090}`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	t.Logf("New: %s", body)
 	data := struct{ ID string }{}
 	err = json.Unmarshal(body, &data)
-	resp, body, err = executeRequest(http.MethodPatch, fmt.Sprintf("http://localhost:8080/start?id=%s", data.ID), nil)
+	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/start?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	t.Logf("Config: %s", body)
-	resp, _, err = executeRequest(http.MethodPut, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), bytes.NewReader([]byte(`}{`)))
+	resp, _, err = executeRequest(http.MethodPost, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), bytes.NewReader([]byte(`}{`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	resp, body, err = executeRequest(http.MethodPut, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), bytes.NewReader(body))
+	resp, body, err = executeRequest(http.MethodPost, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), bytes.NewReader(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	resp, body, err = executeRequest(http.MethodPatch, fmt.Sprintf("http://localhost:8080/stop?id=%s", data.ID), nil)
+	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/stop?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	data.ID = "wrong"
-	resp, body, err = executeRequest(http.MethodPatch, fmt.Sprintf("http://localhost:8080/start?id=%s", data.ID), nil)
+	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/start?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-	resp, body, err = executeRequest(http.MethodPut, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), nil)
+	resp, body, err = executeRequest(http.MethodPost, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-	resp, body, err = executeRequest(http.MethodPatch, fmt.Sprintf("http://localhost:8080/stop?id=%s", data.ID), nil)
+	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/stop?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-	resp, body, err = executeRequest(http.MethodPatch, fmt.Sprintf("http://localhost:8080/wrong?id=%s", data.ID), nil)
+	resp, body, err = executeRequest(http.MethodGet, "http://localhost:8080/dump", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/wrong?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-	time.Sleep(50 * time.Millisecond)
-
-	killIt(100 * time.Millisecond)
 }
 
 func executeRequest(method, url string, body io.Reader) (*http.Response, []byte, error) {

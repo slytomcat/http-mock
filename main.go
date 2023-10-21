@@ -60,9 +60,20 @@ func root(cmd *cobra.Command, _ []string) {
 		logger.Printf("Shutdown error:%v", err)
 	}
 	logger.Println("Shutdown finished.")
+	dumpConfigs()
+}
+
+func dumpConfigs() {
+	_ = os.MkdirAll(dataDirName, 01775)
 	for _, h := range handlers {
 		h.Stop()
+		cfg := h.GetConfig()
+		err := os.WriteFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), cfg, 0664)
+		if err != nil {
+			logger.Printf("Storing config for handler %s error: %v\n", h.id, err)
+		}
 	}
+	logger.Printf("Config dumps are stored into %s\n", dataDirName)
 }
 
 func handleCommands(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +83,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Method + r.URL.Path {
-	case "GET/new":
+	case "POST/new":
 		handler, err := NewHandler(body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -81,7 +92,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		handlers[handler.id] = handler
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(fmt.Sprintf(`{"id": "%s"}`, handler.id)))
-	case "PATCH/start":
+	case "GET/start":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if err := h.Start(); err != nil {
@@ -100,7 +111,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
-	case "PUT/config":
+	case "POST/config":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			err := h.SetConfig(body)
@@ -112,7 +123,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
-	case "PATCH/stop":
+	case "GET/stop":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if err := h.Stop(); err != nil {
@@ -123,6 +134,9 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
+	case "GET/dump":
+		dumpConfigs()
+		w.WriteHeader(http.StatusOK)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

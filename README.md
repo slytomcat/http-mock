@@ -16,8 +16,8 @@ Responses can be stored in one of 2 formats:
 
 The format of chunked response is described in the section [below](#chunked-response-file-format). 
 
-It's important to understand that responses in HTTP/2 protocol version can be treated as chunked. Thous even one chunk response in HTTP/2 protocol may be written into chunked data format. This is one more reason to review the generated config and correct it together with the responses. The chunked response can be converted into conventional one by removing 12 first symbols from each line.
-Also remove the `"Transfer-Encoding": "chunked"` item from `"headers"` and remove the `"chunked": "true"` parameter fron corresponding response into the handler config.
+It's important to understand that responses in HTTP/2 protocol version can be treated as chunked. Thous even one chunk response in HTTP/2 protocol may be written into chunked data format. This is one more reason to review the generated config and correct it together with the responses. The chunked response can be converted into conventional one by removing first 12 symbols from each line.
+Also remove the `"Transfer-Encoding": "chunked"` item from `"headers"` and remove the `"chunked": "true"` parameter from corresponding response into the handler config.
 
 ## get
 ```
@@ -30,14 +30,14 @@ or clone/download repository source and build it by
 ```
 executed from the repo folder. You need Golang v.1.20 or higher to build the binary. Also the `build.sh` uses `upx` utility to compact the binary but You may skip this step by commenting or removing the line with `upc` call. 
 
+Or you may get the docker image from github (TO-DO: make CI for docker and provide link here)
+
 ## usage
 
 ```
 http-mock  
 ```
 It will start management service on `localhost:8080`.
-
-Or you may get the docker image from github TO-DO: make CI for docker and provide link here
 
 ## options
 

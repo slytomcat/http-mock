@@ -52,7 +52,7 @@ jobs:
         with:
           name: coverage_artifacts
           path: coverage.html
-  push:
+  publish:
     needs: [build, test]
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
@@ -67,4 +67,30 @@ jobs:
           GH_TOKEN: ${{ secrets.ACTION_TOKEN }}
         run: |
           gh release create "$(git branch --show-current)-$(git rev-parse --short HEAD)" ./http-mock
-
+  push:
+    needs: [build, test]
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: http-mock
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build_artifacts
+      - name: Log into github registry
+        run: echo "${{ secrets.ACTION_TOKEN }}" | docker login https://ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Build and Push image for github
+        run: |
+          IMAGE_ID=ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME
+          # Change all uppercase to lowercase
+          IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
+          # Get version
+          chmod a+x http-mock
+          VERSION=$(./http-mock -v | awk '{print $2}')
+          echo "Building image $IMAGE_ID:$VERSION"
+          docker build . --file dockerfile --tag $IMAGE_ID:$VERSION
+          docker tag $IMAGE_ID:$VERSION $IMAGE_ID:latest
+          # Push image to GitHub Packages.
+          docker push --all-tags $IMAGE_ID

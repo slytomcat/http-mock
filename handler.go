@@ -422,11 +422,18 @@ func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) 
 	sendHeaders(w.Header(), response.Headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(response.Code)
-	scanner := bufio.NewScanner(bytes.NewReader([]byte(response.Response)))
 	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
+	reader := bufio.NewReader(bytes.NewReader([]byte(response.Response)))
 	defer responseWriter.Close()
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		data, _, err := reader.ReadLine()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				logger.Printf("%s error reading response data: %s\n", h.id, err)
+			}
+			return
+		}
+		line := string(data)
 		delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
 		if err != nil {
 			logger.Printf("%s error parsing chunked file: %s\n", h.id, err)
@@ -454,7 +461,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 		chunk, _, err := reader.ReadLine()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				logger.Printf("%s reading response error: %s", h.id, err)
+				logger.Printf("%s reading response body error: %s", h.id, err)
 			}
 			break
 		}

@@ -55,6 +55,9 @@ func TestMainFunc(t *testing.T) {
 	msg := execute("-h")
 	require.Contains(t, msg, "Usage:")
 	require.Contains(t, msg, version)
+	msg = execute("-v")
+	require.NotContains(t, msg, "Usage:")
+	require.Contains(t, msg, version)
 }
 
 func killIt(delay time.Duration) {

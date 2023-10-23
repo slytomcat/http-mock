@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,7 +35,7 @@ var (
 func init() {
 	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "localhost", "host to start service")
 	rootCmd.Flags().IntVarP(&cmdPort, "port", "p", 8080, "port to start service")
-	rootCmd.Flags().StringVarP(&dataDirName, "data", "d", "_storage", "path for data storage")
+	rootCmd.Flags().StringVarP(&dataDirName, "data", "d", "_storage", "path for configs storage")
 }
 
 func main() {
@@ -41,6 +43,7 @@ func main() {
 }
 
 func root(cmd *cobra.Command, _ []string) {
+	loadConfigs()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleCommands)
 	server := http.Server{
@@ -61,19 +64,6 @@ func root(cmd *cobra.Command, _ []string) {
 	}
 	logger.Println("Shutdown finished.")
 	dumpConfigs()
-}
-
-func dumpConfigs() {
-	_ = os.MkdirAll(dataDirName, 01775)
-	for _, h := range handlers {
-		h.Stop()
-		cfg := h.GetConfig()
-		err := os.WriteFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), cfg, 0664)
-		if err != nil {
-			logger.Printf("Storing config for handler %s error: %v\n", h.id, err)
-		}
-	}
-	logger.Printf("Config dumps are stored into %s\n", dataDirName)
 }
 
 func handleCommands(w http.ResponseWriter, r *http.Request) {
@@ -134,10 +124,55 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
-	case "GET/dump":
+	case "GET/dump_configs":
 		dumpConfigs()
+		w.WriteHeader(http.StatusOK)
+	case "GET/load_configs":
+		loadConfigs()
 		w.WriteHeader(http.StatusOK)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func dumpConfigs() {
+	_ = os.MkdirAll(dataDirName, 01775)
+	for _, h := range handlers {
+		h.Stop()
+		cfg := h.GetConfig()
+		err := os.WriteFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), cfg, 0664)
+		if err != nil {
+			logger.Printf("Storing config for handler %s error: %v\n", h.id, err)
+		}
+	}
+	logger.Printf("Config dumps are stored into %s\n", dataDirName)
+}
+
+func loadConfigs() {
+	files, err := os.ReadDir(dataDirName)
+	if err != nil {
+		logger.Printf("reading storage folder %s error: %v\n", dataDirName, err)
+		return
+	}
+	for _, file := range files {
+		fileName := path.Join(dataDirName, file.Name())
+		cfg, err := os.ReadFile(fileName)
+		if err != nil {
+			logger.Printf("reading config file %s error: %v\n", fileName, err)
+			continue
+		}
+		id := strings.Split(fileName, ".")[0]
+		if handler, ok := handlers[id]; ok {
+			if err := handler.SetConfig(cfg); err != nil {
+				logger.Printf("setting config from %s for handler %s error: %v\n", fileName, id, err)
+			}
+			continue
+		}
+		if handler, err := NewHandler(cfg); err != nil {
+			logger.Printf("setting config from %s for new handler error: %v\n", fileName, err)
+		} else {
+			handlers[handler.id] = handler
+		}
+	}
+	logger.Printf("Config dumps from %s are loaded\n", dataDirName)
 }

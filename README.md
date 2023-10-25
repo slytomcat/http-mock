@@ -178,6 +178,23 @@ If `chunked` is equal to `false` and `Transfer-Encoding: chunked` is set into `h
 
 Config example:
 ```
+{
+  "ID":"2674c815a936",
+  "host":"localhost",
+  "port":8090,
+  "forward-url":"",
+  "passthrough-re":"^$",
+  "url-re":"^.*$",
+  "body-re":"^.*$",
+  "responses":[
+    {
+      "id":"766C4650CB3E23432941DDCD3D663883BA3AF05C5DA44D79074657EB776B99C3",
+      "url":"/url",
+      "code":200,
+      "response":"ok"
+    }
+  ]
+}
 ```
 When the handler handles new request the url of request and its body is used to make the ID (sha256). If that Id exists among the `responses` then the recorded response is used as respense on the request. When ID is not exists then that request is forwarded to the external service using `forward-url`. If `forward-url` is not set than HTTP 404 is returned.
 When `forward-url` is set then the request is forwarded and the received response will be replayed as request response and it will be recorded. 

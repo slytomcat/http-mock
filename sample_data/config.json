@@ -1,23 +1,28 @@
-[
-    {
-        "re": "/path\\?arg=val",
-        "path": "sample_data/body_1.json",
-        "headers": {
-            "Connection": "keep-alive"
-        }
-    },
-    {
-        "re": "/wrong$",
-        "path": "/dev/null",
-        "code": 400
-    },
-    {
-        "re": "/stream$",
-        "path": "sample_data/stream.data",
-        "headers": {
-            "Transfer-Encoding": "chunked",
-            "Content-Type": "text/CSV; charset=utf-8"
+{
+    "pass-trough": null,
+    "responses-folder": "sample_data",
+    "body-filter": "(id: 0x[0-9a-f]+)+",
+    "responses": [
+        {
+            "re": "/path\\?arg=val",
+            "path": "body_1.json",
+            "headers": {
+                "Connection": "keep-alive"
+            }
         },
-        "stream": true
-    }
-]
+        {
+            "re": "/wrong$",
+            "path": "/dev/null",
+            "code": 400
+        },
+        {
+            "re": "/stream$",
+            "path": "stream.data",
+            "headers": {
+                "Transfer-Encoding": "chunked",
+                "Content-Type": "text/CSV; charset=utf-8"
+            },
+            "stream": true
+        }
+    ]
+}

@@ -21,7 +21,7 @@ Also remove the `"Transfer-Encoding": "chunked"` item from `"headers"` and remov
 
 # get docker image 
 ```
-TO DO: provide short instructions here
+docker pull ghcr.io/slytomcat/http-mock:latest
 ```
 
 # get executable binary
@@ -66,29 +66,29 @@ Code 400: means that the provided config couldn't be parsed
 
 ## start handler
 - request
-Method: `GET`
-URL: `/start?id=<handler id>`
+  - Method: `GET`
+  - URL: `/start?id=<handler id>`
 - response
-Code 200: without body means that the handler was successfully started
-Code 420: means that provided handler id was not found
-Code 500: means that the starting of the handler have been failed
+  - Code 200: without body means that the handler was successfully started
+  - Code 420: means that provided handler id was not found
+  - Code 500: means that the starting of the handler have been failed
 
 ## stop handler
 - request
-Method: `GET`
-URL: `/stop?id=<handler id>`
+  - Method: `GET`
+  - URL: `/stop?id=<handler id>`
 - response
-Code 200: without body means that the handler was successfully stopped
-Code 420: means that provided handler id was not found
-Code 500: means that the stopping of the handler have been failed
+  - Code 200: without body means that the handler was successfully stopped
+  - Code 420: means that provided handler id was not found
+  - Code 500: means that the stopping of the handler have been failed
 
 ## get handler config
 - request
-Method: `GET`
-URL: `/config?id=<handler id>`
+  - Method: `GET`
+  - URL: `/config?id=<handler id>`
 - response
-Code 200: with body containing the [handler config](#handler-config)
-Code 420: means that provided handler id was not found
+  - Code 200: with body containing the [handler config](#handler-config)
+  - Code 420: means that provided handler id was not found
 
 ## set handler config
 - request
@@ -96,55 +96,55 @@ Method: `POST`
 URL: `/config?id=<handler id>`
 Body: json with the [handler config](#handler-config)
 - response
-Code 200: without body means that the handler config was successfully stored
-Code 420: means that provided handler id was not found
-Code 400: means that the provided config couldn't be parsed
+  - Code 200: without body means that the handler config was successfully stored
+  - Code 420: means that provided handler id was not found
+  - Code 400: means that the provided config couldn't be parsed
 
 ## get single response from handler config
 - request
-Method: `GET`
-URL: `/response?id=<handler id>&resp-id=<response id>`
+  - Method: `GET`
+  - URL: `/response?id=<handler id>&resp-id=<response id>`
 - response
-Code 200: with body containing the requested [response](#response)
-Code 400: means that provided response id was not found
-Code 420: means that provided handler id was not found
+  - Code 200: with body containing the requested [response](#response)
+  - Code 400: means that provided response id was not found
+  - Code 420: means that provided handler id was not found
 
 ## set single response from handler config
 - request
-Method: `POST`
-URL: `/response?id=<handler id>`
-Body: json with the [response](#response) to store in the handler config. 
+  - Method: `POST`
+  - URL: `/response?id=<handler id>`
+  - Body: json with the [response](#response) to store in the handler config. 
 
 When fields `url` and `body` in the provided response are matching with fields `url` and `body` in the one of existing response, then that response will be overwritten.
 If the provided response contains `id` the response with the same `id` will be deleted before storing new one. When there no response with `id` in the provided response or when `id` is not provided then the provided response will be written as new one.
 
 - response
-Code 200: without body means that the response was successfully stored
-Code 400: means that provided response id was not found
-Code 420: means that provided handler id was not found
+  - Code 200: without body means that the response was successfully stored
+  - Code 400: means that provided response id was not found
+  - Code 420: means that provided handler id was not found
 
 ## delete single response from handler config
 - request
-Method: `DELETE`
-URL: `/response?id=<handler id>&resp-id=<response id>`
+  - Method: `DELETE`
+  - URL: `/response?id=<handler id>&resp-id=<response id>`
 - response
-Code 200: without body means that the response was successfully deleted
-Code 400: means that provided response id was not found
-Code 420: means that provided handler id was not found
+  - Code 200: without body means that the response was successfully deleted
+  - Code 400: means that provided response id was not found
+  - Code 420: means that provided handler id was not found
 
 ## dump all handlers config to local folder
 - request
-Method: `GET`
-URL: `/dump-configs`
+  - Method: `GET`
+  - URL: `/dump-configs`
 - response
-Code 200: without body means that all handler configs were successfully stored to local folder
+  - Code 200: without body means that all handler configs were successfully stored to local folder
 
 ## load handler configs from local folder 
 - request
-Method: `GET`
-URL: `/load-configs`
+  - Method: `GET`
+  - URL: `/load-configs`
 - response
-Code 200: without body means that the handler configs were successfully loaded from local folder
+  - Code 200: without body means that the handler configs were successfully loaded from local folder
 
 
 # handler config

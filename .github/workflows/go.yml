@@ -88,7 +88,7 @@ jobs:
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
           # Get version
           chmod a+x http-mock
-          VERSION=$(./http-mock -v | awk '{print $2}')
+          VERSION=$(./http-mock -v | awk '{print $3}')
           echo "Building image $IMAGE_ID:$VERSION"
           docker build . --file dockerfile --tag $IMAGE_ID:$VERSION
           docker tag $IMAGE_ID:$VERSION $IMAGE_ID:latest

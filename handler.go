@@ -276,6 +276,20 @@ func (h *Handler) DeleteResponse(sID string) error {
 	return nil
 }
 
+// GetResponse returns response in json format
+func (h *Handler) GetResponse(sID string) ([]byte, error) {
+	key, err := h.parseKey(sID)
+	if err != nil {
+		return nil, err
+	}
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	if r, ok := h.responses[*key]; ok {
+		return json.Marshal(r)
+	}
+	return nil, fmt.Errorf("response %s not found", sID)
+}
+
 func (h *Handler) makeKey(url string, body string) [32]byte {
 	u := h.urlRe.FindString(url)
 	b := h.bodyRe.FindAllString(body, -1)

@@ -124,10 +124,48 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
-	case "GET/dump_configs":
+	case "GET/response":
+		id := r.URL.Query().Get("id")
+		if h, ok := handlers[id]; ok {
+			respID := r.URL.Query().Get("resp-id")
+			data, err := h.GetResponse(respID)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+			} else {
+				w.WriteHeader(http.StatusOK)
+				w.Write(data)
+			}
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	case "POST/response":
+		id := r.URL.Query().Get("id")
+		if h, ok := handlers[id]; ok {
+			err = h.UpdateResponse(body)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	case "DELETE/response":
+		id := r.URL.Query().Get("id")
+		if h, ok := handlers[id]; ok {
+			respID := r.URL.Query().Get("resp-id")
+			if err = h.DeleteResponse(respID); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	case "GET/dump-configs":
 		dumpConfigs()
 		w.WriteHeader(http.StatusOK)
-	case "GET/load_configs":
+	case "GET/load-configs":
 		loadConfigs()
 		w.WriteHeader(http.StatusOK)
 	default:

@@ -11,6 +11,7 @@ Each handler has it's own configuration and can:
 - replay recorded responses
 - passthrough some requests as just proxy (without recording it)
 - work as an recorded responses relayer (not known requests will return HTTP 404 status code).    
+
 The configuration of service can be changed (as wel as individual responses) via http requests to management service.
 
 Responses can be stored in one of 2 formats:
@@ -19,13 +20,13 @@ Responses can be stored in one of 2 formats:
 
 The format of chunked response is described in the section [below](#chunked-response-file-format). 
 
-It's important to understand that responses in HTTP/2 protocol version can be treated as chunked. Thous even one chunk response in HTTP/2 protocol may be written into chunked data format. This is one more reason to review the generated config and correct it together with the responses. The chunked response can be converted into conventional one by removing first 12 symbols from each line.
-Also remove the `"Transfer-Encoding": "chunked"` item from `"headers"` and remove the `"chunked": "true"` parameter from corresponding response into the handler config.
+It's important to understand that responses in HTTP/2 protocol version can be treated as chunked. Thous even one chunk response in HTTP/2 protocol may be written into chunked data format. This is one more reason to review the generated config and correct it together with the responses. The chunked response can be converted into conventional one by removing first 12 symbols from each line. Also remove the `"Transfer-Encoding": "chunked"` item from `"headers"` and remove the `"chunked": "true"` parameter from corresponding response into the handler config.
 
 # get docker image 
 ```
 docker pull ghcr.io/slytomcat/http-mock:latest
 ```
+You can also use [dockerCompose.yml](dockerCompose.yml) to start the configured container.
 
 # get executable binary
 ```
@@ -41,17 +42,18 @@ executed from the repo folder. You need Golang v.1.20 or higher to build the bin
 ## usage
 
 ```
-http-mock  
+http-mock
 ```
-It will start management service on `localhost:8080`.
+It will start management service on `:8080`.
 
 ## options
 
 ```
 Flags:
   -h, --help               help for http-mock
-  -s, --host string        host to start service (default "localhost")
+  -s, --host string        host to start service (default "")
   -p, --port int           port to start service (default 8080)
+  -d, --data string        path for configs storage (default "_storage")
   -v, --version            print version and exit
 ```
 
@@ -60,12 +62,12 @@ Flags:
 
 ## new handler
 - request
-Method: `POST`
-URL: `/new`
-Body: json with the [handler config](#handler-config)
+  - Method: `POST`
+  - URL: `/new`
+  - Body: json with the [handler config](#handler-config)
 - response
-Code 200: json with a new handler id looking like: `{"id": "7fd35feeb647"}`
-Code 400: means that the provided config couldn't be parsed
+  - Code 200: json with a new handler id looking like: `{"id": "7fd35feeb647"}`
+  - Code 400: means that the provided config couldn't be parsed
 
 ## start handler
 - request
@@ -85,6 +87,15 @@ Code 400: means that the provided config couldn't be parsed
   - Code 420: means that provided handler id was not found
   - Code 500: means that the stopping of the handler have been failed
 
+
+## get list of handlers IDs
+- request
+  - Method: `GET`
+  - URL: `/list`
+- response
+  - Code 200: json list with handlers IDs.
+
+
 ## get handler config
 - request
   - Method: `GET`
@@ -95,9 +106,9 @@ Code 400: means that the provided config couldn't be parsed
 
 ## set handler config
 - request
-Method: `POST`
-URL: `/config?id=<handler id>`
-Body: json with the [handler config](#handler-config)
+  - Method: `POST`
+  - URL: `/config?id=<handler id>`
+  - Body: json with the [handler config](#handler-config)
 - response
   - Code 200: without body means that the handler config was successfully stored
   - Code 420: means that provided handler id was not found
@@ -135,14 +146,14 @@ If the provided response contains `id` the response with the same `id` will be d
   - Code 400: means that provided response id was not found
   - Code 420: means that provided handler id was not found
 
-## dump all handlers config to local folder
+## dump all handlers configs to local folder
 - request
   - Method: `GET`
   - URL: `/dump-configs`
 - response
   - Code 200: without body means that all handler configs were successfully stored to local folder
 
-## load handler configs from local folder 
+## load handlers configs from local folder 
 - request
   - Method: `GET`
   - URL: `/load-configs`
@@ -152,14 +163,14 @@ If the provided response contains `id` the response with the same `id` will be d
 
 # handler config
 
-The config is provided into JSON object wit following parameters (attributes):
+The handler config is provided into JSON object wit following parameters (attributes):
 
 mandatory parameters:
 - `port` - port to start handler
-- `host` - host to start handler
 
 optional parameters:
-- `id` - it random hex encoded string. It is automatically created when new handler created.
+- `host` - host to start handler, by default it is "".
+- `id` - any unique ID or random hex encoded string (when id is not provided). If it is not provided it is automatically created when new handler created.
 - `forward-url` - where to forward requests to handler. If it not provided the handler can only respond on known request.
 - `passthrough-re` - regexp that used to pass through requests (without recording). This regexp have to match to the request url joined with the request body. By default it is regexp `^$` that match only empty value. The passthrough mode requires `forward-url` to be set.    
 - `url-re` - regexp that is applied to the request url. It can be used to specify the key part into the request url. By default it is `^.*$` that match to whole URL with parameters.  
@@ -200,8 +211,8 @@ Config example:
 }
 ```
 When the handler handles new request the url of request and its body is used to make the ID (sha256). If that Id exists among the `responses` then the recorded response is used as respense on the request. When ID is not exists then that request is forwarded to the external service using `forward-url`. If `forward-url` is not set than HTTP 404 is returned.
-When `forward-url` is set then the request is forwarded and the received response will be replayed as request response and it will be recorded. 
-When the request match the `passthrough-re` then the forwarded request response is not stored. 
+When `forward-url` is set then the request is forwarded and the received response will be replayed as request response and it will be recorded.
+When the request match the `passthrough-re` then the forwarded request response is not stored.
 
 ## chunked response format
 For responses in chunked mode the file have to be in special format. Example:
@@ -211,4 +222,4 @@ For responses in chunked mode the file have to be in special format. Example:
 ```
 Each line of file contains fixed length prefix (before symbol `|`) and the chunk of data.
 The prefix contains the delay in milliseconds that have to past before sending the chunk.
-The handler automatically makes correct format for such responses and can replay it on following requests with the same url and body. 
+The handler automatically makes correct format for such responses and can replay it on following requests with the same url and body.

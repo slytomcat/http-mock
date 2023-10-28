@@ -1,4 +1,7 @@
 [![Go](https://github.com/slytomcat/http-mock/actions/workflows/go.yml/badge.svg)](https://github.com/slytomcat/http-mock/actions/workflows/go.yml)
+[![Platform: linux-64](https://img.shields.io/badge/Platform-linux--64-blue)]()
+[![Docker image](https://img.shields.io/badge/Docker-image-blue)](https://github.com/slytomcat/http-mock/pkgs/container/http-mock)
+
 # http-mock
 MOCK Service for http services.
 

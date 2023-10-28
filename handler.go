@@ -74,6 +74,9 @@ func NewHandler(cfg []byte) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config parsing error: %v", err)
 	}
+	if h.id != "" {
+		return h, nil
+	}
 	idSrc, err := uuid.NewRandom()
 	if err != nil {
 		return nil, fmt.Errorf("unexpected error while id creation: %v", err)
@@ -117,6 +120,7 @@ func (h *Handler) parseConfig(data []byte) error {
 	responses := make(map[[32]byte]Response, len(cfg.Responses))
 	h.lock.Lock()
 	defer h.lock.Unlock()
+	h.id = cfg.ID
 	h.host = cfg.Host
 	h.port = cfg.Port
 	h.passthroughRe = passthroughRe
@@ -181,6 +185,7 @@ func (h *Handler) Start() error {
 	case <-time.After(time.Millisecond):
 		return nil
 	case err := <-errCh:
+		logger.Printf("%s starting error: %v\n", h.id, err)
 		return err
 	}
 }

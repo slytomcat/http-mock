@@ -1,0 +1,12 @@
+version: "3"
+
+services:
+
+  http-mock:
+    container_name: http-mock
+    image: ghcr.io/slytomcat/http-mock:lates
+    restart: always
+    network_mode: host
+    volumes:
+      - ./_storage:/opt/http-mock/_storage
+

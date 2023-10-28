@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,21 +26,33 @@ var (
 	logger      = log.New(os.Stdout, "", log.LUTC|log.LstdFlags|log.Lmicroseconds|log.Lmsgprefix)
 	handlers    = map[string]*Handler{}
 	rootCmd     = &cobra.Command{
-		Use:     "http-mock -s localhost -p 8080",
+		Use:     "http-mock",
 		Short:   fmt.Sprintf("http-mock is proxy/mock service v. %s", version),
 		Run:     root,
-		Example: "http-mock",
+		Example: "http-mock --port 8080 --host localhost\n\nValues for --port, --host, --data can be also set via environment variables MANAGEMENT_PORT, MANAGEMENT_HOST and MANAGEMENT_DATA.",
 		Version: version,
 	}
 )
 
 func init() {
-	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "localhost", "host to start service")
+	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "", "host to start service")
 	rootCmd.Flags().IntVarP(&cmdPort, "port", "p", 8080, "port to start service")
 	rootCmd.Flags().StringVarP(&dataDirName, "data", "d", "_storage", "path for configs storage")
 }
 
 func main() {
+	if val, ok := os.LookupEnv("MANAGEMENT_PORT"); ok {
+		if port, err := strconv.Atoi(val); err == nil {
+			cmdPort = port
+		}
+	}
+	if val, ok := os.LookupEnv("MANAGEMENT_HOST"); ok {
+		cmdHost = val
+	}
+	if val, ok := os.LookupEnv("MANAGEMENT_DATA"); ok {
+		dataDirName = val
+	}
+
 	rootCmd.Execute()
 }
 
@@ -82,6 +96,14 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		handlers[handler.id] = handler
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(fmt.Sprintf(`{"id": "%s"}`, handler.id)))
+	case "GET/list":
+		w.WriteHeader(http.StatusOK)
+		list := make([]string, 0, len(handlers))
+		for k := range handlers {
+			list = append(list, k)
+		}
+		resp, _ := json.Marshal(list)
+		w.Write(resp)
 	case "GET/start":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {

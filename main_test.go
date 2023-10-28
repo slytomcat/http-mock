@@ -68,12 +68,23 @@ func killIt(delay time.Duration) {
 	}()
 }
 
-func TestRootFunc(t *testing.T) {
-	cleanUp()
-	defer cleanUp()
-	cmd := &cobra.Command{}
-	killIt(150 * time.Millisecond)
-	root(cmd, []string{})
+func TestMainByEnv(t *testing.T) {
+	host := "localhost"
+	port := 8099
+	data := "_STORAGE"
+	t.Setenv("MANAGEMENT_PORT", fmt.Sprint(port))
+	t.Setenv("MANAGEMENT_HOST", host)
+	t.Setenv("MANAGEMENT_DATA", data)
+	defer cleanUp()()
+	killIt(20 * time.Millisecond)
+	main()
+	defer func() {
+		_ = os.RemoveAll(data)
+	}()
+	time.Sleep(time.Millisecond)
+	require.Equal(t, host, cmdHost)
+	require.Equal(t, port, cmdPort)
+	require.Equal(t, data, dataDirName)
 }
 
 func TestService(t *testing.T) {
@@ -94,12 +105,13 @@ func TestService(t *testing.T) {
 	resp, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", bytes.NewReader([]byte(`}`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	resp, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", bytes.NewReader([]byte(`{"host": "localhost","port":8090, "responses":[{"url": "/url", "code":200, "response": "ok"}]}`)))
+	resp, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", bytes.NewReader([]byte(`{"id":"test","port":8090, "responses":[{"url": "/url", "code":200, "response": "ok"}]}`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	t.Logf("New: %s", body)
 	data := struct{ ID string }{}
 	err = json.Unmarshal(body, &data)
+	require.Equal(t, "test", data.ID)
 	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/start?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -149,6 +161,10 @@ func TestService(t *testing.T) {
 	resp, _, err = executeRequest(http.MethodGet, "http://localhost:8080/load-configs", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, body, err = executeRequest(http.MethodGet, "http://localhost:8080/list", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, `["test"]`, string(body))
 	data.ID = "wrong"
 	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/start?id=%s", data.ID), nil)
 	require.NoError(t, err)

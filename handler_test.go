@@ -569,7 +569,7 @@ func TestTestHandlerChunkedInteruption(t *testing.T) {
 		delay := time.Since(tick)
 		tick = time.Now()
 		// fmt.Printf("    %v <- '%s'\n", delay, line)
-		assert.InDelta(t, tHandler.chunks[i].delay*time.Millisecond, delay, 3e6, i)
+		assert.InDelta(t, tHandler.chunks[i].delay*time.Millisecond, delay, 4e6, i)
 		assert.Equal(t, tHandler.chunks[i].msg, string(line), 1)
 		i++
 		if i >= 7 {

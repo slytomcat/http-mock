@@ -84,7 +84,9 @@ func TestHandlerUpdateResponseError(t *testing.T) {
 }
 
 var (
-	longData   = strings.Repeat("some very long data to compress ", 32) // 1K data
+	longData  = strings.Repeat("some very long data to compress ", 32) // 1K data
+	shortData = "It's a short data example."                           // 26 bytes data
+
 	testChunks = []chunk{
 		{delay: 30, msg: "data line #1"},
 		{delay: 30, msg: "data line #2"},
@@ -137,14 +139,19 @@ func TestHandler(t *testing.T) {
 		cancelConn            bool              // call context cancel immediately after receiving the data
 	}{
 		{
-			name:        "create error",
+			name:        "create error wrong cfg",
 			config:      `][]`, // wrong json
 			creationErr: "config parsing error: json parsing error: invalid character ']' looking for beginning of value",
 		},
 		{
-			name:     "start error",
-			config:   `{"port": -10}`, // wrong port
-			startErr: "listen tcp: address -10: invalid port",
+			name:        "create error wrong port",
+			config:      `{"port": -10}`, // wrong port
+			creationErr: "config parsing error: port is -10 but it have to set to value bigger than 1000",
+		},
+		{
+			name:        "create error port too low",
+			config:      `{"port": 10}`, // wrong port
+			creationErr: "config parsing error: port is 10 but it have to set to value bigger than 1000",
 		},
 		{
 			name:      "GET 404 response",
@@ -182,6 +189,20 @@ func TestHandler(t *testing.T) {
 				code:     200,
 			},
 			expConfigParts: []string{`"Content-Encoding":"gzip"`, `some very long data to compress some very long`},
+		},
+		{
+			name:    "get not compressed response",
+			config:  `{"host": "localhost", "port": 8080}`,
+			url:     "/compressed",
+			method:  http.MethodGet,
+			expCode: 200,
+			expResp: shortData,
+			handler: &testHandler{
+				response: []byte(shortData),
+				headers:  map[string]string{"Content-Encoding": "gzip"},
+				code:     200,
+			},
+			unexpectedConfigParts: []string{`"Content-Encoding":"gzip"`, `some very long data to compress some very long`},
 		},
 		{
 			name:      "POST 200 response w body re",
@@ -284,8 +305,7 @@ func TestHandler(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		testName := tc.name
-		t.Run(testName, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h, err := NewHandler([]byte(tc.config))
 			if tc.creationErr != "" {
 				require.EqualError(t, err, tc.creationErr)
@@ -454,9 +474,11 @@ func (th *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		data := th.response
-		if len(data) > 255 && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if len(data) > minCompressSize && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			w.Header().Set("Content-Encoding", "gzip")
 			data = mustCompress(data)
+		} else {
+			w.Header().Del("Content-Encoding")
 		}
 		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
 		w.WriteHeader(th.code)
@@ -494,6 +516,33 @@ func TestTestHandler(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, longData, string(body))
+	require.Equal(t, true, resp.Uncompressed)
+}
+
+func TestTestHandlerShort(t *testing.T) {
+	shortData := "short data example"
+	server := httptest.NewServer(&testHandler{
+		response: []byte(shortData),
+		headers:  map[string]string{"Content-Encoding": "gzip"},
+		code:     200,
+	})
+	TestClient := server.Client()
+	defer func() {
+		server.Close()
+		TestClient = nil
+		time.Sleep(50 * time.Millisecond)
+	}()
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/some", nil)
+	require.NoError(t, err)
+	time.Sleep(30 * time.Millisecond) // wait for test server start
+	resp, err := TestClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	t.Logf("resp: %+v, body len: %v", resp, len(body))
+	require.Equal(t, shortData, string(body))
+	require.Equal(t, false, resp.Uncompressed)
 }
 
 func TestTestHandlerChunked(t *testing.T) {
@@ -535,7 +584,7 @@ func TestTestHandlerChunked(t *testing.T) {
 	}
 }
 
-func TestTestHandlerChunkedInteruption(t *testing.T) {
+func TestTestHandlerChunkedInterruption(t *testing.T) {
 	tHandler := &testHandler{
 		code:   200,
 		chunks: testChunks,
@@ -604,5 +653,46 @@ func TestLive(t *testing.T) {
 		return
 	case <-time.After(170 * time.Second):
 		return
+	}
+}
+
+func TestHandler_sendSimpleResponse(t *testing.T) {
+	handlerID := "handlerId"
+	tests := []struct {
+		name     string
+		response Response
+		headers  http.Header
+		body     string
+	}{
+		{
+			name: "Long data compressed",
+			response: Response{
+				Code:     200,
+				Headers:  map[string]string{"Content-Encoding": "gzip"},
+				Response: longData,
+			},
+			headers: http.Header{"Content-Encoding": []string{"gzip"}, "Content-Length": []string{"72"}},
+			body:    string(mustCompress([]byte(longData))),
+		},
+		{
+			name: "Short data uncompressed",
+			response: Response{
+				Code:     200,
+				Headers:  map[string]string{"Content-Encoding": "gzip"},
+				Response: shortData,
+			},
+			headers: http.Header{"Content-Length": []string{"26"}},
+			body:    shortData,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &Handler{id: handlerID}
+			w := httptest.NewRecorder()
+			h.sendSimpleResponse(tt.response, w)
+			assert.Equal(t, tt.body, w.Body.String())
+			assert.Equal(t, tt.headers, w.Result().Header)
+
+		})
 	}
 }

@@ -98,8 +98,8 @@ func (h *Handler) parseConfig(data []byte) error {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return fmt.Errorf("json parsing error: %v", err)
 	}
-	if cfg.Port == 0 {
-		return fmt.Errorf("port is 0 but it have to set to value bigger than 1000")
+	if cfg.Port < 1000 {
+		return fmt.Errorf("port is %d but it have to set to value bigger than 1000", cfg.Port)
 	}
 	URLRe, err := makeRe(cfg.URLRe, "^.*$")
 	if err != nil {
@@ -224,8 +224,12 @@ func (h *Handler) SetConfig(cfg []byte) error {
 		return err
 	}
 	if h.port != pPort || h.host != pHost {
-		h.Stop()
-		h.Start()
+		if err := h.Stop(); err != nil {
+			return err
+		}
+		if err := h.Start(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -353,13 +357,16 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) sendSimpleResponse(response Response, w http.ResponseWriter) {
 	body := []byte(response.Response)
 	for k, v := range response.Headers {
-		if k == "Content-Encoding" && strings.Contains(v, "gzip") && len(body) > minCompressSize {
-			if compressed, err := compress(body); err != nil {
+		if k == "Content-Encoding" && strings.Contains(v, "gzip") {
+			if len(body) <= minCompressSize {
+				continue
+			}
+			compressed, err := compress(body)
+			if err != nil {
 				logger.Printf("%s response body compression error: %v\n", h.id, err)
 				continue
-			} else {
-				body = compressed
 			}
+			body = compressed
 		}
 		w.Header().Set(k, v)
 	}

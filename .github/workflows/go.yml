@@ -7,13 +7,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@latest
+      - uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@latest
         with:
           go-version: 1.21
       - name: Cache
-        uses: actions/cache@latest
+        uses: actions/cache@3.2.3
         with:
           path: |
             /home/runner/.cache/go-build/
@@ -31,13 +31,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@latest
+      - uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@latest
         with:
           go-version: 1.21
       - name: Cache
-        uses: actions/cache@latest
+        uses: actions/cache@3.2.3
         with:
           path: |
             /home/runner/.cache/go-build/
@@ -57,7 +57,7 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@latest
+      - uses: actions/checkout@v4
       - name: download build artifacts
         uses: actions/download-artifact@latest
         with:
@@ -74,7 +74,7 @@ jobs:
     env:
       IMAGE_NAME: http-mock
     steps:
-      - uses: actions/checkout@latest
+      - uses: actions/checkout@v4
       - name: Download Artifacts
         uses: actions/download-artifact@latest
         with:

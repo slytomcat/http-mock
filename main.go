@@ -205,6 +205,9 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 	case "GET/load-configs":
 		loadConfigs()
 		w.WriteHeader(http.StatusOK)
+	case "GET/":
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("http-mock service v. %s", version)))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("wrong url: " + reqPath))

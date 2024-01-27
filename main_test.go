@@ -98,7 +98,11 @@ func TestService(t *testing.T) {
 	}()
 	time.Sleep(50 * time.Millisecond)
 
-	resp, body, err := executeRequest(http.MethodPost, "http://localhost:8080/new", nil)
+	resp, body, err := executeRequest(http.MethodGet, "http://localhost:8080/", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "http-mock service v. local_build", string(body))
+	resp, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	require.Equal(t, "config parsing error: json parsing error: unexpected end of JSON input", string(body))

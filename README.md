@@ -3,16 +3,16 @@
 [![Docker image](https://img.shields.io/badge/Docker-image-blue)](https://github.com/slytomcat/http-mock/pkgs/container/http-mock)
 
 # http-mock
-MOCK Service for http services.
+MOCK Service for testings http clients.
 
 It work as service that allows to start/handle/stop the handlers for handling request to several different external services.
-Each handler has it's own configuration and can:
+Each handler works on its own port, has individual configuration and can:
 - record forwarded requests&responses 
 - replay recorded responses
 - passthrough some requests as just proxy (without recording it)
 - work as an recorded responses relayer (not known requests will return HTTP 404 status code).    
 
-The configuration of service can be changed (as wel as individual responses) via http requests to management service.
+The configuration of service can be changed (as wel as individual responses) via http requests to management service port.
 
 Responses can be stored in one of 2 formats:
 - just raw body of response (with uncompressed content of response even if the requester sent `Accept-Encoding: gzip` into request header and response has `Content-Encoding: gzip` in its header)
@@ -20,7 +20,7 @@ Responses can be stored in one of 2 formats:
 
 The format of chunked response is described in the section [below](#chunked-response-file-format). 
 
-It's important to understand that responses in HTTP/2 protocol version can be treated as chunked. Thous even one chunk response in HTTP/2 protocol may be written into chunked data format. This is one more reason to review the generated config and correct it together with the responses. The chunked response can be converted into conventional one by removing first 12 symbols from each line. Also remove the `"Transfer-Encoding": "chunked"` item from `"headers"` and remove the `"chunked": "true"` parameter from corresponding response into the handler config.
+It's important to understand that responses in HTTP/2 protocol version can be treated as chunked. Thous even one chunk response in HTTP/2 protocol may be written into chunked data format. This is one more reason to review the generated configuration and correct it together with the responses. The chunked response can be converted into conventional one by removing first 12 symbols from each line. Also remove the `"Transfer-Encoding": "chunked"` item from `"headers"` and remove the `"chunked": "true"` parameter from corresponding response into the handler config.
 
 # get docker image 
 ```
@@ -60,14 +60,21 @@ Flags:
 
 # management service API
 
+## health check
+- request
+  - Method: `GET`
+  - URL: `/`
+- response
+  - Code 200: with the service version string
+
 ## new handler
 - request
   - Method: `POST`
   - URL: `/new`
   - Body: json with the [handler config](#handler-config)
 - response
-  - Code 200: json with a new handler id looking like: `{"id": "7fd35feeb647"}`
-  - Code 400: means that the provided config couldn't be parsed
+  - Code 200: json with a new handler id looking like: `{"id":"7fd35feeb647","status":"inactive"}`
+  - Code 400: means that the provided config couldn't be parsed, the body contain the config parsing error
 
 ## start handler
 - request
@@ -75,8 +82,8 @@ Flags:
   - URL: `/start?id=<handler id>`
 - response
   - Code 200: without body means that the handler was successfully started
-  - Code 420: means that provided handler id was not found
-  - Code 500: means that the starting of the handler have been failed
+  - Code 420: means that provided handler id was not found, the body contain the error description
+  - Code 500: means that the starting of the handler have been failed, the body contain the error description
 
 ## stop handler
 - request
@@ -84,8 +91,8 @@ Flags:
   - URL: `/stop?id=<handler id>`
 - response
   - Code 200: without body means that the handler was successfully stopped
-  - Code 420: means that provided handler id was not found
-  - Code 500: means that the stopping of the handler have been failed
+  - Code 420: means that provided handler id was not found, the body contain the error description
+  - Code 500: means that the stopping of the handler have been failed, the body contain the error description
 
 
 ## get list of handlers IDs
@@ -93,7 +100,7 @@ Flags:
   - Method: `GET`
   - URL: `/list`
 - response
-  - Code 200: json list with handlers IDs.
+  - Code 200: json list with handlers IDs and current statuses.
 
 
 ## get handler config
@@ -102,7 +109,7 @@ Flags:
   - URL: `/config?id=<handler id>`
 - response
   - Code 200: with body containing the [handler config](#handler-config)
-  - Code 420: means that provided handler id was not found
+  - Code 420: means that provided handler id was not found, the body contain the error description
 
 ## set handler config
 - request
@@ -111,8 +118,8 @@ Flags:
   - Body: json with the [handler config](#handler-config)
 - response
   - Code 200: without body means that the handler config was successfully stored
-  - Code 420: means that provided handler id was not found
-  - Code 400: means that the provided config couldn't be parsed
+  - Code 420: means that provided handler id was not found, the body contain the error description
+  - Code 400: means that the provided config couldn't be parsed, the body contain the error description
 
 ## get single response from handler config
 - request
@@ -120,8 +127,8 @@ Flags:
   - URL: `/response?id=<handler id>&resp-id=<response id>`
 - response
   - Code 200: with body containing the requested [response](#response)
-  - Code 400: means that provided response id was not found
-  - Code 420: means that provided handler id was not found
+  - Code 400: means that provided response id was not found, the body contain the error description
+  - Code 420: means that provided handler id was not found, the body contain the error description
 
 ## set single response from handler config
 - request
@@ -134,8 +141,8 @@ If the provided response contains `id` the response with the same `id` will be d
 
 - response
   - Code 200: without body means that the response was successfully stored
-  - Code 400: means that provided response id was not found
-  - Code 420: means that provided handler id was not found
+  - Code 400: means that provided response id was not found, the body contain the error description
+  - Code 420: means that provided handler id was not found, the body contain the error description
 
 ## delete single response from handler config
 - request
@@ -143,8 +150,8 @@ If the provided response contains `id` the response with the same `id` will be d
   - URL: `/response?id=<handler id>&resp-id=<response id>`
 - response
   - Code 200: without body means that the response was successfully deleted
-  - Code 400: means that provided response id was not found
-  - Code 420: means that provided handler id was not found
+  - Code 400: means that provided response id was not found, the body contain the error description
+  - Code 420: means that provided handler id was not found, the body contain the error description
 
 ## dump all handlers configs to local folder
 - request

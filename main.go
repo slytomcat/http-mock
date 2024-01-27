@@ -98,12 +98,12 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		}
 		handlers[handler.id] = handler
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf(`{"id": "%s"}`, handler.id)))
+		w.Write([]byte(handler.String()))
 	case "GET/list":
 		w.WriteHeader(http.StatusOK)
-		list := make([]string, 0, len(handlers))
-		for k := range handlers {
-			list = append(list, k)
+		list := make([]*Status, 0, len(handlers))
+		for _, h := range handlers {
+			list = append(list, h.GetStatus())
 		}
 		resp, _ := json.Marshal(list)
 		w.Write(resp)

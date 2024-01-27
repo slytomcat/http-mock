@@ -43,7 +43,8 @@ type Response struct {
 
 // Handler is
 type Handler struct {
-	id            string //todo
+	id            string
+	status        string
 	host          string
 	port          int
 	forwardURL    string
@@ -58,22 +59,34 @@ type Handler struct {
 // Config is struct for Handler configuration
 type Config struct {
 	ID            string
-	Host          string     `json:"host"`
+	Status        string     `json:"status"`
+	Host          string     `json:"host,omitempty"`
 	Port          int        `json:"port"`
-	ForwardURL    string     `json:"forward-url"`
+	ForwardURL    string     `json:"forward-url,omitempty"`
 	PassthroughRe string     `json:"passthrough-re,omitempty"`
 	URLRe         string     `json:"url-re,omitempty"`
 	BodyRe        string     `json:"body-re,omitempty"`
 	Responses     []Response `json:"responses,omitempty"`
 }
 
+// Status represents current status of handler
+type Status struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
 // NewHandler is is a single
-func NewHandler(cfg []byte) (*Handler, error) {
-	h := &Handler{}
-	err := h.parseConfig(cfg)
+func NewHandler(cfg []byte) (h *Handler, err error) {
+	h = &Handler{}
+	err = h.parseConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("config parsing error: %v", err)
 	}
+	defer func() {
+		if h.status == "active" {
+			err = h.Start()
+		}
+	}()
 	if h.id != "" {
 		return h, nil
 	}
@@ -84,6 +97,21 @@ func NewHandler(cfg []byte) (*Handler, error) {
 	id := idSrc.String()
 	h.id = id[len(id)-12:]
 	return h, nil
+}
+
+// String return current handler status as json string
+func (h *Handler) String() string {
+	return fmt.Sprintf(`{"id":"%s","status":"%s"}`, h.id, h.status)
+}
+
+// GetStatus returns the reference on Status obj
+func (h *Handler) GetStatus() *Status {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	return &Status{
+		ID:     h.id,
+		Status: h.status,
+	}
 }
 
 func makeRe(re, defaultRe string) (*regexp.Regexp, error) {
@@ -121,6 +149,11 @@ func (h *Handler) parseConfig(data []byte) error {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.id = cfg.ID
+	if cfg.Status != "active" {
+		h.status = "inactive"
+	} else {
+		h.status = cfg.Status
+	}
 	h.host = cfg.Host
 	h.port = cfg.Port
 	h.passthroughRe = passthroughRe
@@ -150,6 +183,7 @@ func (h *Handler) GetConfig() []byte {
 	}
 	c, _ := json.Marshal(Config{
 		ID:            h.id,
+		Status:        h.status,
 		Host:          h.host,
 		Port:          h.port,
 		PassthroughRe: h.passthroughRe.String(),
@@ -165,7 +199,9 @@ func (h *Handler) GetConfig() []byte {
 func (h *Handler) Start() error {
 	h.lock.Lock()
 	defer h.lock.Unlock()
+	h.status = "inactive"
 	if h.server != nil {
+		h.status = "active"
 		return fmt.Errorf("%s handler already started", h.id)
 	}
 	mux := http.NewServeMux()
@@ -183,6 +219,7 @@ func (h *Handler) Start() error {
 	logger.Printf("%s starting handler%s on %s:%d\n", h.id, forMsg, h.host, h.port)
 	select {
 	case <-time.After(time.Millisecond):
+		h.status = "active"
 		return nil
 	case err := <-errCh:
 		logger.Printf("%s starting error: %v\n", h.id, err)
@@ -194,6 +231,7 @@ func (h *Handler) Start() error {
 func (h *Handler) Stop() error {
 	h.lock.Lock()
 	defer h.lock.Unlock()
+	h.status = "inactive"
 	forMsg := ""
 	if h.forwardURL != "" {
 		forMsg = " for " + h.forwardURL
@@ -202,14 +240,16 @@ func (h *Handler) Stop() error {
 		return fmt.Errorf("%s handler already stopped", h.id)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
+	defer func() {
+		cancel()
+		h.server = nil
+	}()
 	err := h.server.Shutdown(ctx)
 	if err != nil {
 		h.server.Close()
 		return fmt.Errorf("%s handler%s for %s on %s:%d stopping error:%v", h.id, forMsg, h.forwardURL, h.host, h.port, err)
 	}
 	logger.Printf("%s handler%s on %s:%d finished.", h.id, forMsg, h.host, h.port)
-	h.server = nil
 	return nil
 }
 
@@ -218,15 +258,19 @@ func (h *Handler) SetConfig(cfg []byte) error {
 	h.lock.Lock()
 	pHost := h.host
 	pPort := h.port
+	active := h.status == "active"
 	h.lock.Unlock()
 	err := h.parseConfig(cfg)
 	if err != nil {
 		return err
 	}
-	if h.port != pPort || h.host != pHost {
+	if (h.port != pPort || h.host != pHost || h.status == "inactive") && active {
 		if err := h.Stop(); err != nil {
 			return err
 		}
+		active = false
+	}
+	if h.status == "active" && !active {
 		if err := h.Start(); err != nil {
 			return err
 		}

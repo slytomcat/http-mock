@@ -73,7 +73,7 @@ Flags:
   - URL: `/new`
   - Body: json with the [handler config](#handler-config)
 - response
-  - Code 200: json with a new handler id looking like: `{"id":"7fd35feeb647","status":"inactive"}`
+  - Code 200: json with a new handler id looking like: `{"id":"my_handler","status":"active"}`. When provided [handler config](#handler-config) contains `"status":"active"` then handler will be stated.
   - Code 400: means that the provided config couldn't be parsed, the body contain the config parsing error
 
 ## start handler
@@ -120,6 +120,8 @@ Flags:
   - Code 200: without body means that the handler config was successfully stored
   - Code 420: means that provided handler id was not found, the body contain the error description
   - Code 400: means that the provided config couldn't be parsed, the body contain the error description
+
+The changed value of `host` and/or `port` will restart active handler. The value of `"status"` is also will affect the handler activity status: value `"active"` will try to run or keep handler running, while value `"inactive"`(or empty value) will stop or keep handler stopped. 
 
 ## get single response from handler config
 - request
@@ -177,16 +179,17 @@ mandatory parameters:
 
 optional parameters:
 - `host` - host to start handler, by default it is "".
-- `id` - any unique ID or random hex encoded string (when id is not provided). If it is not provided it is automatically created when new handler created.
-- `forward-url` - where to forward requests to handler. If it not provided the handler can only respond on known request.
+- `id` - any unique ID that may be provided in handler creation or while updating config. If it is not provided it is automatically created as random 16 HEX symbols. Once handler id is set all the communication with handler is performed by this id.
+- `status` - current handler status `active` - for handler that started and `inactive` when handler is not started. It is possible to start and stop handler by changing this config parameter via [set handler config](#set-handler-config). When a new handler created with `"status": "active"` then it will be automatically started.
+- `forward-url` - where to forward requests to handler. If it not provided the handler can only respond on known requests.
 - `passthrough-re` - regexp that used to pass through requests (without recording). This regexp have to match to the request url joined with the request body. By default it is regexp `^$` that match only empty value. The passthrough mode requires `forward-url` to be set.    
 - `url-re` - regexp that is applied to the request url. It can be used to specify the key part into the request url. By default it is `^.*$` that match to whole URL with parameters.  
 - `body-re` - the regexp for request body filtering. It can be used to specify the key part into the request body. By default it is `"^.*$"` that match whole body.
-- `responses` - the array with recorded [responses](#response) .
+- `responses` - the array with recorded [responses](#respone).
 
 ## response 
 Each recorded response has following attributes:
-- `id` - hex representation of SHA256 hash over the request url and body (passed through `url-re` and `body-re` filters). When the response is cahnged and the new values for `url` and `body` are changed it will change the `id`.
+- `id` - hex representation of SHA256 hash over the request url and body (passed through `url-re` and `body-re` filters). When the response is changed (via [set single response from handler config](set-single-response-from-handler-config) or [set handler config](#set-handler-config)) and the values of `url` or/and `body` are changed it will change the `id`. Previous id will be deleted in case of change in values of `url` or/and `body`
 - `url` - request url with parameters.
 - `body` - request body as string.
 - `code` - the HTTP status code of response.    
@@ -200,7 +203,8 @@ If `chunked` is equal to `false` and `Transfer-Encoding: chunked` is set into `h
 Config example:
 ```
 {
-  "ID":"2674c815a936",
+  "ID":"my_handler",
+  "status":"active",
   "host":"localhost",
   "port":8090,
   "forward-url":"",
@@ -217,7 +221,7 @@ Config example:
   ]
 }
 ```
-When the handler handles new request the url of request and its body is used to make the ID (sha256). If that Id exists among the `responses` then the recorded response is used as respense on the request. When ID is not exists then that request is forwarded to the external service using `forward-url`. If `forward-url` is not set than HTTP 404 is returned.
+When the handler handles new request the url of request and its body is used to make the ID (sha256). If that ID exists among the `responses` then the recorded response is used as response on the request. When ID is not exists then that request is forwarded to the external service using `forward-url`. If `forward-url` is not set than HTTP 404 is returned.
 When `forward-url` is set then the request is forwarded and the received response will be replayed as request response and it will be recorded.
 When the request match the `passthrough-re` then the forwarded request response is not stored.
 

@@ -217,8 +217,8 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 func dumpConfigs() {
 	_ = os.MkdirAll(dataDirName, 01775)
 	for _, h := range handlers {
-		h.Stop()
 		cfg := h.GetConfig()
+		h.Stop()
 		err := os.WriteFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), cfg, 0664)
 		if err != nil {
 			logger.Printf("Storing config for handler %s error: %v\n", h.id, err)

@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,12 +22,17 @@ import (
 )
 
 const (
-	delaySize       = 12
 	flushInterval   = 10 * time.Millisecond
 	minCompressSize = 512
 )
 
 var client = http.DefaultClient
+
+// Chunk is a single part of response
+type Chunk struct {
+	Delay int    `json:"delay,omitempty"`
+	Data  string `json:"data,omitempty"`
+}
 
 // Response is the single response storage item
 type Response struct {
@@ -37,8 +41,7 @@ type Response struct {
 	Body     string            `json:"body,omitempty"`
 	Code     int               `json:"code,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
-	Chunked  bool              `json:"chunked,omitempty"`
-	Response string            `json:"response,omitempty"`
+	Response []Chunk           `json:"response,omitempty"`
 }
 
 // Handler is
@@ -296,7 +299,6 @@ func (h *Handler) UpdateResponse(update []byte) error {
 			Body:     resp.Body,
 			Code:     resp.Code,
 			Headers:  resp.Headers,
-			Chunked:  resp.Chunked,
 			Response: resp.Response,
 		}
 		return nil
@@ -382,7 +384,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if ok && !passthrough {
 		// reply mode
 		logger.Printf("%s %s %s body='%s' replay by resp id=%s", h.id, r.Method, url, body, fmt.Sprintf("%X", key))
-		if response.Chunked {
+		if len(response.Response) > 1 {
 			h.sendChunkedResponse(response, w)
 		} else {
 			h.sendSimpleResponse(response, w)
@@ -399,7 +401,10 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) sendSimpleResponse(response Response, w http.ResponseWriter) {
-	body := []byte(response.Response)
+	body := []byte{}
+	if len(response.Response) > 0 {
+		body = []byte(response.Response[0].Data)
+	}
 	for k, v := range response.Headers {
 		if k == "Content-Encoding" && strings.Contains(v, "gzip") {
 			if len(body) <= minCompressSize {
@@ -476,8 +481,7 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 			Body:     body,
 			Code:     resp.StatusCode,
 			Headers:  headers,
-			Chunked:  false,
-			Response: string(respBody),
+			Response: []Chunk{{Data: string(respBody)}},
 		}
 		if !passthrough {
 			h.lock.Lock()
@@ -493,26 +497,11 @@ func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) 
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(response.Code)
 	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
-	reader := bufio.NewReader(bytes.NewReader([]byte(response.Response)))
 	defer responseWriter.Close()
-	for {
-		data, _, err := reader.ReadLine()
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				logger.Printf("%s error reading response data: %s\n", h.id, err)
-			}
-			return
-		}
-		line := string(data)
-		delay, err := strconv.ParseInt(strings.Trim(line[:delaySize], " "), 10, 64)
-		if err != nil {
-			logger.Printf("%s error parsing chunked file: %s\n", h.id, err)
-			return
-		}
-		time.Sleep(time.Duration(delay) * time.Millisecond)
-		_, err = responseWriter.Write([]byte(line[delaySize+1:] + "\n"))
-		if err != nil {
-			logger.Printf("%s error writing to responseWriter: %v\n", h.id, err) // todo
+	for _, chunk := range response.Response {
+		time.Sleep(time.Duration(chunk.Delay) * time.Millisecond)
+		if _, err := responseWriter.Write([]byte(chunk.Data)); err != nil {
+			logger.Printf("%s error writing to responseWriter: %v\n", h.id, err)
 			return
 		}
 	}
@@ -520,15 +509,20 @@ func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) 
 
 func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
 	reader := bufio.NewReader(resp.Body)
-	respBody := bytes.NewBuffer([]byte{})
 	sendHeaders(w.Header(), headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
+	delDelimiter := false
+	if cType := w.Header().Get("Content-Type"); cType == "application/json" {
+		delDelimiter = true
+	}
 	w.WriteHeader(resp.StatusCode)
+	// reader := httputil.NewChunkedReader(resp.Body) //https://paulbellamy.com/2015/06/forwarding-http-chunked-responses-without-reframing-in-go
+	response := []Chunk{}
 	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
 	defer responseWriter.Close()
 	tick := time.Now()
 	for {
-		chunk, _, err := reader.ReadLine()
+		buf, err := reader.ReadBytes('\n')
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				logger.Printf("%s reading response body error: %s", h.id, err)
@@ -539,32 +533,31 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 		delay := now.Sub(tick)
 		tick = now
 		// replay chunk to requester
-		data := append(bytes.Clone(chunk), '\n') // make data clone to avoid data racing
+		if delDelimiter {
+			buf = buf[:len(buf)-1]
+		}
+		data := bytes.Clone(buf) // make data clone to avoid data racing and remove \n
 		// logger.Printf("Handler     :%v <- '%s'\n", delay, data[:len(data)-1])
 		if _, err := responseWriter.Write(data); err != nil {
 			logger.Printf("%s writing response to responseWriter error: %s", h.id, err)
 			break
 		}
 		if !passthrough {
-			if _, err := respBody.Write(formatChink(delay, data)); err != nil {
-				logger.Printf("%s writing response to buffer error: %s", h.id, err)
-				break
-			}
+			response = append(response, Chunk{Delay: int(delay.Milliseconds()), Data: string(data)})
 		}
 	}
 	if passthrough {
 		return
 	}
-	response := Response{
+	res := Response{
 		URL:      url,
 		Body:     body,
 		Code:     resp.StatusCode,
 		Headers:  headers,
-		Chunked:  true,
-		Response: respBody.String(),
+		Response: response,
 	}
 	h.lock.Lock()
-	h.responses[key] = response
+	h.responses[key] = res
 	h.lock.Unlock()
 }
 
@@ -573,11 +566,4 @@ func sendHeaders(w http.Header, headers map[string]string) {
 	for k, v := range headers {
 		w.Add(k, v)
 	}
-}
-
-// format chunk data part
-func formatChink(delay time.Duration, data []byte) []byte {
-	delayStr := strconv.FormatInt(delay.Milliseconds(), 10)
-	spacer := "            "[:delaySize-len(delayStr)]
-	return append([]byte(spacer+delayStr+"|"), data...)
 }

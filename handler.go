@@ -511,9 +511,9 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 	reader := bufio.NewReader(resp.Body)
 	sendHeaders(w.Header(), headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
-	delDelimiter := false
-	if cType := w.Header().Get("Content-Type"); cType == "application/json" {
-		delDelimiter = true
+	delimiter := true
+	if w.Header().Get("Content-Type") == "application/json" {
+		delimiter = false
 	}
 	w.WriteHeader(resp.StatusCode)
 	// reader := httputil.NewChunkedReader(resp.Body) //https://paulbellamy.com/2015/06/forwarding-http-chunked-responses-without-reframing-in-go
@@ -522,7 +522,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 	defer responseWriter.Close()
 	tick := time.Now()
 	for {
-		buf, err := reader.ReadBytes('\n')
+		chunk, _, err := reader.ReadLine()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				logger.Printf("%s reading response body error: %s", h.id, err)
@@ -533,11 +533,10 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 		delay := now.Sub(tick)
 		tick = now
 		// replay chunk to requester
-		if delDelimiter {
-			buf = buf[:len(buf)-1]
+		if delimiter {
+			chunk = append(chunk, '\n')
 		}
-		data := bytes.Clone(buf) // make data clone to avoid data racing and remove \n
-		// logger.Printf("Handler     :%v <- '%s'\n", delay, data[:len(data)-1])
+		data := bytes.Clone(chunk) // make data clone to avoid data racing
 		if _, err := responseWriter.Write(data); err != nil {
 			logger.Printf("%s writing response to responseWriter error: %s", h.id, err)
 			break

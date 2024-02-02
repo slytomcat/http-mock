@@ -552,9 +552,9 @@ func TestTestHandlerChunked(t *testing.T) {
 		TestClient = nil
 		time.Sleep(50 * time.Millisecond)
 	}()
+	time.Sleep(5 * time.Millisecond) // wait for test server start
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/some", nil)
 	require.NoError(t, err)
-	time.Sleep(5 * time.Millisecond) // wait for test server start
 	resp, err := TestClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -567,7 +567,7 @@ func TestTestHandlerChunked(t *testing.T) {
 	for {
 		line, _, err := reader.ReadLine()
 		if err != nil {
-			t.Logf("%v", err)
+			t.Logf("error: %v", err)
 			break
 		}
 		delay := time.Since(tick)
@@ -626,21 +626,13 @@ func TestTestHandlerChunkedInterruption(t *testing.T) {
 }
 func TestLive(t *testing.T) {
 	t.Skip("live test") // require activated VPN
-	configFileName := "config.json"
-	cfg, err := os.ReadFile(configFileName)
-	if err != nil {
-		cfg = []byte(`{"host": "localhost", "port": 8080, "forward-url": "http://udf-nyc.xstaging.tv/hub0"}`)
-	}
+	cfg := []byte(`{"id": "hub", "status": "active", "host": "localhost", "port": 8080, "forward-url": "http://udf-nyc.xstaging.tv/hub0"}`)
 	h, err := NewHandler(cfg)
 	require.NoError(t, err)
-	require.NoError(t, h.Start())
-	defer func() {
-		cfg := h.GetConfig()
-		t.Logf("config: %s", string(cfg))
-		t.Logf("config length: %d", len(cfg))
-		_ = h.Stop()
-		_ = os.WriteFile(configFileName, cfg, 0677)
-	}()
+	require.NotNil(t, h)
+	resp, err := http.DefaultClient.Get("http://localhost:8080/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+	require.NoError(t, err)
+	require.Equal(t, 200, resp.StatusCode)
 	sig := make(chan (os.Signal), 3)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	select {
@@ -692,8 +684,7 @@ func TestHandler_sendSimpleResponse(t *testing.T) {
 	}
 }
 
-func TestRealBigData(t *testing.T) {
-	h, err := NewHandler([]byte(`{
+var bigChunksConfig = `{
 	"id": "hub0",
 	"status": "active",
 	"port": 8086,
@@ -744,7 +735,10 @@ func TestRealBigData(t *testing.T) {
 			]
 		}
 	]
-}`))
+}`
+
+func TestRealBigDataFromConfig(t *testing.T) {
+	h, err := NewHandler([]byte(bigChunksConfig))
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	resp, err := http.DefaultClient.Get("http://localhost:8086/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
@@ -759,28 +753,48 @@ func TestRealBigData(t *testing.T) {
 	err = json.Unmarshal(body, &r)
 	require.NoError(t, err)
 }
-
-func TestHandler_handleChunkedResponse(t *testing.T) {
-	type args struct {
-		passthrough bool
-		resp        *http.Response
-		url         string
-		headers     map[string]string
-		body        string
-		key         [32]byte
+func TestRealBigDataFromExtSource(t *testing.T) {
+	h, err := NewHandler([]byte(bigChunksConfig))
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	defer h.Stop()
+	h2, err := NewHandler([]byte(`{"id":"second", "status":"active", "port":8090, "forward-url": "http://localhost:8086" }`))
+	require.NoError(t, err)
+	require.NotNil(t, h2)
+	defer h2.Stop()
+	resp, err := http.DefaultClient.Get("http://localhost:8090/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, 200, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	// t.Logf("%s", body)
+	// require.Len(t, body, 141902)
+	r := make(map[string]any)
+	err = json.Unmarshal(body, &r)
+	require.NoError(t, err)
+	// cfg := h2.GetConfig()
+	// t.Logf("second config: %s", cfg)
+	key := h2.makeKey("/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs", "")
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	h2.lock.Lock()
+	defer h2.lock.Unlock()
+	resps := h.responses[key].Response
+	resps2 := h2.responses[key].Response
+	require.Equal(t, len(resps), len(resps2))
+	total := 0
+	total2 := 0
+	for i, c := range resps {
+		total += len(c.Data)
+		total2 += len(resps2[i].Data)
 	}
-	tests := []struct {
-		name string
-		args args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := &Handler{}
-			w := httptest.NewRecorder()
-			h.handleChunkedResponse(tt.args.passthrough, tt.args.resp, tt.args.url, tt.args.headers, tt.args.body, tt.args.key, w)
-
-		})
-	}
+	require.Equal(t, total, total2)
+	require.Equal(t, total, len(body))
+	// t.Logf("total:%d\ntotal2:%d\nReceived:%d", total, total2, len(body))
+	// t.Logf("cunnks :%d", len(resps))
+	// t.Logf("%v", h2.responses[key].Headers)
+	// t.Logf("%v", resp.Header)
+	// t.Logf("%v", resp.TransferEncoding)
+	// t.Logf("uncompressed:%v", resp.Uncompressed)
 }

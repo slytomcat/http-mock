@@ -1,0 +1,9 @@
+{
+    "ID": "2-nd_proxy",
+    "status": "active",
+    "port": 8092,
+    "forward-url": "http://localhost:8091",
+    "passthrough-re": "^$",
+    "url-re": "^.*$",
+    "body-re": "^.*$"
+}

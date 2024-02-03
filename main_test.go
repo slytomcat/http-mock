@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"syscall"
 	"testing"
@@ -235,4 +236,60 @@ func executeRequest(method, url string, body io.Reader) (*http.Response, []byte,
 		return nil, nil, err
 	}
 	return resp, data, nil
+}
+
+func checkMgmPortStatus() bool {
+	resp, err := http.DefaultClient.Get("http://localhost:8080/")
+	return err == nil && resp.StatusCode == 200
+}
+
+func copyFolder(srcDir, dstDir string) error {
+	if err := os.MkdirAll(dstDir, 01775); err != nil {
+		return err
+	}
+	filesList, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+	for _, file := range filesList {
+		source := path.Join(srcDir, file.Name())
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		destination := path.Join(dstDir, file.Name())
+		err = os.WriteFile(destination, data, 0664)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestProxiesChain(t *testing.T) {
+	testStorageFolder := "test_storage"
+	testDataSourceFolder := "proxiesCainTestData"
+	require.NoError(t, copyFolder(testDataSourceFolder, testStorageFolder))
+	defer os.RemoveAll(testStorageFolder)
+	t.Setenv("MANAGEMENT_DATA", testStorageFolder)
+	t.Setenv("MANAGEMENT_PORT", "8080")
+	t.Setenv("MANAGEMENT_HOST", "localhost")
+	go main()
+	require.Eventually(t, checkMgmPortStatus, 3*time.Second, 100*time.Millisecond)
+	resp, err := http.DefaultClient.Get("http://localhost:8095/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+	require.NoError(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	sourceResp, err := http.DefaultClient.Get("http://localhost:8090/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+	require.NoError(t, err)
+	require.Equal(t, 200, sourceResp.StatusCode)
+	defer sourceResp.Body.Close()
+	source, err := io.ReadAll(sourceResp.Body)
+	require.NoError(t, err)
+	require.Equal(t, source, data)
+	killIt(500 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
+	require.Never(t, checkMgmPortStatus, 1*time.Second, 100*time.Millisecond)
 }

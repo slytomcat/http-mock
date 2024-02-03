@@ -26,6 +26,7 @@ It's important to understand that responses in HTTP/2 protocol version can be tr
 ```
 docker pull ghcr.io/slytomcat/http-mock:latest
 ```
+Configuration of container can be done via environment variables `MANAGEMENT_HOST`, `MANAGEMENT_PORT` and `MANAGEMENT_DATA` (see [configuration](#configuration) for details).
 You can also use [dockerCompose.yml](dockerCompose.yml) to start the configured container.
 
 # get executable binary
@@ -44,19 +45,28 @@ executed from the repo folder. You need Golang v.1.20 or higher to build the bin
 ```
 http-mock
 ```
-It will start management service on `:8080`.
+It will start management service with default configuration on `:8080`.
 
-## options
-
+## configuration
+Command line options can be used to set configuration values or to get help/version for `http-mock`. It is help output: 
 ```
+http-mock is proxy/mock service v. master-xxxxxxxx
+
+Usage:
+  http-mock [flags]
+
+Examples:
+http-mock --port 8080 --host localhost
+
+Values for --port, --host, --data can be also set via environment variables MANAGEMENT_PORT, MANAGEMENT_HOST and MANAGEMENT_DATA.
+
 Flags:
-  -h, --help               help for http-mock
-  -s, --host string        host to start service (default "")
-  -p, --port int           port to start service (default 8080)
-  -d, --data string        path for configs storage (default "_storage")
-  -v, --version            print version and exit
+  -d, --data string   path for configs storage (default "_storage")
+  -h, --help          help for http-mock
+  -s, --host string   host to start service
+  -p, --port int      port to start service (default 8080)
+  -v, --version       version for http-mock
 ```
-
 
 # management service API
 
@@ -64,6 +74,7 @@ Flags:
 - request
   - Method: `GET`
   - URL: `/`
+- request example `curl "http://localhost:8080"`
 - response
   - Code 200: with the service version string
 
@@ -72,14 +83,16 @@ Flags:
   - Method: `POST`
   - URL: `/new`
   - Body: json with the [handler config](#handler-config)
+- request example `curl "http://localhost:8080" -d '{"id":"my_handler","status":"active","port":8090}'`
 - response
-  - Code 200: json with a new handler id looking like: `{"id":"my_handler","status":"active"}`. When provided [handler config](#handler-config) contains `"status":"active"` then handler will be stated.
+  - Code 200: json with a new handler id looking like: `{"id":"my_handler","status":"active","port":8090}`. When provided [handler config](#handler-config) contains `"status":"active"` then handler will be stated.
   - Code 400: means that the provided config couldn't be parsed, the body contain the config parsing error
 
 ## start handler
 - request
   - Method: `GET`
   - URL: `/start?id=<handler id>`
+- request example `curl "http://localhost:8080/start?id=my_handler"`
 - response
   - Code 200: without body means that the handler was successfully started
   - Code 420: means that provided handler id was not found, the body contain the error description
@@ -89,24 +102,25 @@ Flags:
 - request
   - Method: `GET`
   - URL: `/stop?id=<handler id>`
+- request example `curl "http://localhost:8080/stop?id=my_handler"`
 - response
   - Code 200: without body means that the handler was successfully stopped
   - Code 420: means that provided handler id was not found, the body contain the error description
   - Code 500: means that the stopping of the handler have been failed, the body contain the error description
 
-
 ## get list of handlers IDs
 - request
   - Method: `GET`
   - URL: `/list`
+- request example `curl "http://localhost:8080/list"`
 - response
   - Code 200: json list with handlers IDs and current statuses.
-
 
 ## get handler config
 - request
   - Method: `GET`
   - URL: `/config?id=<handler id>`
+- request example `curl "http://localhost:8080/config?id=my_handler"`
 - response
   - Code 200: with body containing the [handler config](#handler-config)
   - Code 420: means that provided handler id was not found, the body contain the error description
@@ -116,6 +130,7 @@ Flags:
   - Method: `POST`
   - URL: `/config?id=<handler id>`
   - Body: json with the [handler config](#handler-config)
+- request example `curl "http://localhost:8080/config?id=my_handler" -d '{"id":"my_handler","status":"active","port":8090}'`
 - response
   - Code 200: without body means that the handler config was successfully stored
   - Code 420: means that provided handler id was not found, the body contain the error description
@@ -127,6 +142,7 @@ The changed value of `host` and/or `port` will restart active handler. The value
 - request
   - Method: `GET`
   - URL: `/response?id=<handler id>&resp-id=<response id>`
+- request example `curl "http://localhost:8080/response?id=my_handler&resp-id=3A4CAD37B2985E4D47EC61D00A2241E3997C1AEAB9A37299217004892FEE7A3E"`
 - response
   - Code 200: with body containing the requested [response](#response)
   - Code 400: means that provided response id was not found, the body contain the error description
@@ -136,7 +152,8 @@ The changed value of `host` and/or `port` will restart active handler. The value
 - request
   - Method: `POST`
   - URL: `/response?id=<handler id>`
-  - Body: json with the [response](#response) to store in the handler config. 
+  - Body: json with the [response](#response) to store in the handler config.
+- request example `curl "http://localhost:8080/response?id=my_handler" -d '{"url":"/some","code":200,"response":[{"data":"ok"}]}'`
 
 When fields `url` and `body` in the provided response are matching with fields `url` and `body` in the one of existing response, then that response will be overwritten.
 If the provided response contains `id` the response with the same `id` will be deleted before storing new one. When there no response with `id` in the provided response or when `id` is not provided then the provided response will be written as new one.
@@ -154,6 +171,7 @@ If the provided response contains `id` the response with the same `id` will be d
   - Code 200: without body means that the response was successfully deleted
   - Code 400: means that provided response id was not found, the body contain the error description
   - Code 420: means that provided handler id was not found, the body contain the error description
+- request example `curl -X DELETE "http://localhost:8080/?id=my_handler&resp-id=3A4CAD37B2985E4D47EC61D00A2241E3997C1AEAB9A37299217004892FEE7A3E"`
 
 ## dump all handlers configs to local folder
 - request
@@ -161,6 +179,7 @@ If the provided response contains `id` the response with the same `id` will be d
   - URL: `/dump-configs`
 - response
   - Code 200: without body means that all handler configs were successfully stored to local folder
+- request example `curl "http://localhost:8080/dump-configs"`
 
 ## load handlers configs from local folder 
 - request
@@ -168,7 +187,7 @@ If the provided response contains `id` the response with the same `id` will be d
   - URL: `/load-configs`
 - response
   - Code 200: without body means that the handler configs were successfully loaded from local folder
-
+- request example `curl "http://localhost:8080/load-configs"`
 
 # handler config
 
@@ -179,7 +198,7 @@ mandatory parameters:
 
 optional parameters:
 - `host` - host to start handler, by default it is "".
-- `id` - any unique ID that may be provided in handler creation or while updating config. If it is not provided it is automatically created as random 16 HEX symbols. Once handler id is set all the communication with handler is performed by this id.
+- `id` - any unique ID that may be provided in handler creation or while updating config. If it is not provided it is automatically created as random 16 HEX symbols. Once handler id is set all the communication with handler is performed by this `id`.
 - `status` - current handler status `active` - for handler that started and `inactive` when handler is not started. It is possible to start and stop handler by changing this config parameter via [set handler config](#set-handler-config). When a new handler created with `"status": "active"` then it will be automatically started.
 - `forward-url` - where to forward requests to handler. If it not provided the handler can only respond on known requests.
 - `passthrough-re` - regexp that used to pass through requests (without recording). This regexp have to match to the request url joined with the request body. By default it is regexp `^$` that match only empty value. The passthrough mode requires `forward-url` to be set.    
@@ -194,11 +213,17 @@ Each recorded response has following attributes:
 - `body` - request body as string.
 - `code` - the HTTP status code of response.    
 - `headers` - headers that have to be send with the response. By default the only very common heder items (like `Date` and  e.t.c) will be sent.
-- `chunked` - indicator that response has special format and it will be send in `chunked` mode. By default:`false`.
-- `response` - response body as string.
+- `response` - list of response [chunks](#chunk). For siple response it contain one chunk. Several chunks mean that response is in chunked mode.    
 
-When `chunked` is `true` the response header will contain `Transfer-Encoding: chunked` even if it is non set into `headers`. 
-If `chunked` is equal to `false` and `Transfer-Encoding: chunked` is set into `headers` then it will be ignored (will not be send in response). A good idea is: never use `Transfer-Encoding: chunked` into `headers`.
+When `response` contains more than one chunk the response header will contain `Transfer-Encoding: chunked` even if it is non set into `headers`. 
+If `response` contains only one chunk and `Transfer-Encoding: chunked` is set into `headers` then it will be ignored (will not be send in response). A good idea is: never use `Transfer-Encoding: chunked` into `headers`.
+
+### chunk
+Each element of `response` list may contain:
+- `data` - chunk data as string
+- `delay` - number of milliseconds to wait before sending the chunk data to requester. It is ignored for only one chunk (simple) response.
+
+The chunk with `data` and without `delay` will be send immediately. Chunk without `data` but with non-zero value of `delay` will just add waiting before processing next `chunk` without sending anything to requester.
 
 Config example:
 ```
@@ -207,30 +232,17 @@ Config example:
   "status":"active",
   "host":"localhost",
   "port":8090,
-  "forward-url":"",
-  "passthrough-re":"^$",
-  "url-re":"^.*$",
-  "body-re":"^.*$",
   "responses":[
     {
       "id":"766C4650CB3E23432941DDCD3D663883BA3AF05C5DA44D79074657EB776B99C3",
       "url":"/url",
       "code":200,
-      "response":"ok"
+      "response":[{"data":"ok"}]
     }
   ]
 }
 ```
+
 When the handler handles new request the url of request and its body is used to make the ID (sha256). If that ID exists among the `responses` then the recorded response is used as response on the request. When ID is not exists then that request is forwarded to the external service using `forward-url`. If `forward-url` is not set than HTTP 404 is returned.
 When `forward-url` is set then the request is forwarded and the received response will be replayed as request response and it will be recorded.
 When the request match the `passthrough-re` then the forwarded request response is not stored.
-
-## chunked response format
-For responses in chunked mode the file have to be in special format. Example:
-```
-       2000|data line #1
-       1000|data line #2
-```
-Each line of file contains fixed length prefix (before symbol `|`) and the chunk of data.
-The prefix contains the delay in milliseconds that have to past before sending the chunk.
-The handler automatically makes correct format for such responses and can replay it on following requests with the same url and body.

@@ -1,0 +1,9 @@
+{
+    "ID": "1-st_proxy",
+    "status": "active",
+    "port": 8091,
+    "forward-url": "http://localhost:8090",
+    "passthrough-re": "^$",
+    "url-re": "^.*$",
+    "body-re": "^.*$"
+}

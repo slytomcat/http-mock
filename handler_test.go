@@ -172,6 +172,21 @@ func TestHandler(t *testing.T) {
 			unexpectedConfigParts: []string{`"Content-Encoding":"gzip"`}, // too short response to compress it
 		},
 		{
+			name:      "GET 200 response from empty URL",
+			config:    `{"host": "localhost", "port": 8080}`,
+			method:    http.MethodGet,
+			url:       "",
+			expCode:   200,
+			expResp:   "ok",
+			expHeader: map[string]string{"Content-Length": "2"},
+			handler: &testHandler{
+				response: []byte("ok"),
+				headers:  map[string]string{},
+				code:     200,
+			},
+			expConfigParts: []string{`"url":"/"`}, // tail '/' have to be truncated
+		},
+		{
 			name:    "get compressed response",
 			config:  `{"host": "localhost", "port": 8080}`,
 			url:     "/compressed",
@@ -373,7 +388,7 @@ func TestHandler(t *testing.T) {
 				}
 			}
 			if len(tc.unexpectedConfigParts) > 0 {
-				for _, part := range tc.expConfigParts {
+				for _, part := range tc.unexpectedConfigParts {
 					assert.NotContains(t, cnf, part)
 				}
 			}
@@ -388,6 +403,9 @@ func TestHandlerDoubleStartStop(t *testing.T) {
 	require.NoError(t, err)
 	err = h.Start()
 	require.Error(t, err)
+	h2, err := NewHandler([]byte(`{"host": "localhost", "port": 8080, "status": "active"}`))
+	require.Error(t, err)
+	require.Nil(t, h2)
 	err = h.Stop()
 	require.NoError(t, err)
 	err = h.Stop()
@@ -424,206 +442,6 @@ func TestHandlerSequence(t *testing.T) {
 	}
 }
 
-type chunk struct {
-	delay time.Duration
-	msg   string
-}
-
-type testHandler struct {
-	response   []byte
-	chunks     []chunk
-	headers    map[string]string
-	code       int
-	handleFunc func(w http.ResponseWriter, r *http.Request)
-}
-
-func (th *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if th.handleFunc != nil {
-		th.handleFunc(w, r)
-		return
-	}
-	logger.Printf("testHandler: %s %s", r.Method, r.URL.String())
-	defer func() {
-		logger.Printf("testHandler exits: %s %s", r.Method, r.URL.String())
-	}()
-	for k, v := range th.headers {
-		w.Header().Set(k, v)
-	}
-	if len(th.chunks) > 0 {
-		w.Header().Set("Transfer-Encoding", "chunked")
-		w.Header().Del("Content-Encoding") // compression in chunked mode is not supported
-		flush := w.(http.Flusher).Flush
-		w.WriteHeader(th.code)
-		flush()
-		// tick := time.Now()
-		for _, c := range th.chunks {
-			time.Sleep(c.delay * time.Millisecond)
-			// logger.Printf("testHandler :%v -> '%s'\n", time.Since(tick), c.msg)
-			// tick = time.Now()
-			_, err := w.Write([]byte(c.msg + "\n"))
-			if err != nil {
-				logger.Printf("testHandler for %s %s writing error: %v ", r.Method, r.URL.String(), err)
-				return
-			}
-			flush()
-		}
-	} else {
-		data := th.response
-		if len(data) > minCompressSize && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			w.Header().Set("Content-Encoding", "gzip")
-			data = mustCompress(data)
-		} else {
-			w.Header().Del("Content-Encoding")
-		}
-		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
-		w.WriteHeader(th.code)
-		w.Write(data)
-	}
-}
-
-func mustCompress(data []byte) []byte {
-	compressed, err := compress(data)
-	if err != nil {
-		panic(err)
-	}
-	return compressed
-}
-
-func TestTestHandler(t *testing.T) {
-	server := httptest.NewServer(&testHandler{
-		response: []byte(longData),
-		headers:  map[string]string{"Content-Encoding": "gzip"},
-		code:     200,
-	})
-	TestClient := server.Client()
-	defer func() {
-		server.Close()
-		TestClient = nil
-		time.Sleep(50 * time.Millisecond)
-	}()
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/some", nil)
-	require.NoError(t, err)
-	time.Sleep(30 * time.Millisecond) // wait for test server start
-	resp, err := TestClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	t.Logf("resp: %+v", resp)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, longData, string(body))
-	require.Equal(t, true, resp.Uncompressed)
-}
-
-func TestTestHandlerShort(t *testing.T) {
-	shortData := "short data example"
-	server := httptest.NewServer(&testHandler{
-		response: []byte(shortData),
-		headers:  map[string]string{"Content-Encoding": "gzip"},
-		code:     200,
-	})
-	TestClient := server.Client()
-	defer func() {
-		server.Close()
-		TestClient = nil
-		time.Sleep(50 * time.Millisecond)
-	}()
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/some", nil)
-	require.NoError(t, err)
-	time.Sleep(30 * time.Millisecond) // wait for test server start
-	resp, err := TestClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	t.Logf("resp: %+v, body len: %v", resp, len(body))
-	require.Equal(t, shortData, string(body))
-	require.Equal(t, false, resp.Uncompressed)
-}
-
-func TestTestHandlerChunked(t *testing.T) {
-	tHandler := &testHandler{
-		code:   200,
-		chunks: testChunks[:4],
-	}
-	server := httptest.NewServer(tHandler)
-	TestClient := server.Client()
-	defer func() {
-		server.Close()
-		TestClient = nil
-		time.Sleep(50 * time.Millisecond)
-	}()
-	time.Sleep(5 * time.Millisecond) // wait for test server start
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/some", nil)
-	require.NoError(t, err)
-	resp, err := TestClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	// t.Logf("resp: %+v", resp)
-	require.Len(t, resp.TransferEncoding, 1)
-	require.Equal(t, "chunked", resp.TransferEncoding[0])
-	reader := bufio.NewReader(resp.Body)
-	i := 0
-	tick := time.Now()
-	for {
-		line, _, err := reader.ReadLine()
-		if err != nil {
-			t.Logf("error: %v", err)
-			break
-		}
-		delay := time.Since(tick)
-		tick = time.Now()
-		// fmt.Printf("    %v -> '%s'\n", delay, line)
-		assert.InDelta(t, tHandler.chunks[i].delay*time.Millisecond, delay, 1e6, i)
-		assert.Equal(t, tHandler.chunks[i].msg, string(line), 1)
-		i++
-	}
-}
-
-func TestTestHandlerChunkedInterruption(t *testing.T) {
-	tHandler := &testHandler{
-		code:   200,
-		chunks: testChunks,
-	}
-	server := httptest.NewServer(tHandler)
-	TestClient := server.Client()
-	defer func() {
-		server.Close()
-		TestClient = nil
-	}()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/some", nil)
-	require.NoError(t, err)
-	time.Sleep(5 * time.Millisecond) // wait for test server start
-	resp, err := TestClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	// t.Logf("resp: %+v", resp)
-	require.Len(t, resp.TransferEncoding, 1)
-	require.Equal(t, "chunked", resp.TransferEncoding[0])
-	reader := bufio.NewReader(resp.Body)
-	i := 0
-	tick := time.Now()
-	for {
-		line, _, err := reader.ReadLine()
-		if err != nil {
-			t.Logf("%v", err)
-			break
-		}
-		delay := time.Since(tick)
-		tick = time.Now()
-		// fmt.Printf("    %v <- '%s'\n", delay, line)
-		assert.InDelta(t, tHandler.chunks[i].delay*time.Millisecond, delay, 4e6, i)
-		assert.Equal(t, tHandler.chunks[i].msg, string(line), 1)
-		i++
-		if i >= 7 {
-			resp.Body.Close()
-			cancel()
-			break
-		}
-	}
-	time.Sleep(50 * time.Millisecond) // to get all logs
-}
 func TestLive(t *testing.T) {
 	t.Skip("live test") // require activated VPN
 	cfg := []byte(`{"id": "hub", "status": "active", "host": "localhost", "port": 8080, "forward-url": "http://udf-nyc.xstaging.tv/hub0"}`)
@@ -755,6 +573,7 @@ func TestRealBigDataFromConfig(t *testing.T) {
 	err = json.Unmarshal(body, &r)
 	require.NoError(t, err)
 }
+
 func TestRealBigDataFromExtSource(t *testing.T) {
 	h, err := NewHandler([]byte(bigChunksConfig))
 	require.NoError(t, err)

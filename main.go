@@ -41,9 +41,12 @@ func init() {
 }
 
 func main() {
-	if val, ok := os.LookupEnv("MANAGEMENT_PORT"); ok {
+	envVarName := "MANAGEMENT_PORT"
+	if val, ok := os.LookupEnv(envVarName); ok {
 		if port, err := strconv.Atoi(val); err == nil {
 			cmdPort = port
+		} else {
+			fmt.Printf("error parsing value (%s) of environment variable %s: %v", val, envVarName, err)
 		}
 	}
 	if val, ok := os.LookupEnv("MANAGEMENT_HOST"); ok {
@@ -52,7 +55,6 @@ func main() {
 	if val, ok := os.LookupEnv("MANAGEMENT_DATA"); ok {
 		dataDirName = val
 	}
-
 	rootCmd.Execute()
 }
 
@@ -65,11 +67,11 @@ func root(cmd *cobra.Command, _ []string) {
 		Handler: mux,
 	}
 	go func() { logger.Println(server.ListenAndServe()) }()
-	logger.Printf("Starting the management service on %s\n", server.Addr)
+	logger.Printf("Starting the management service on %s with storage path '%s'\n", server.Addr, dataDirName)
 	sig := make(chan (os.Signal), 3)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	s := <-sig // wait for a signal
-	logger.Printf("%s received. Starting shutdown...", s.String())
+	logger.Printf("signal %s received. Starting shutdown...", s.String())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	err := server.Shutdown(ctx)
@@ -78,6 +80,9 @@ func root(cmd *cobra.Command, _ []string) {
 	}
 	logger.Println("Shutdown finished.")
 	dumpConfigs()
+	for _, h := range handlers {
+		h.Stop()
+	}
 }
 
 func handleCommands(w http.ResponseWriter, r *http.Request) {
@@ -216,15 +221,16 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 
 func dumpConfigs() {
 	_ = os.MkdirAll(dataDirName, 01775)
+
 	for _, h := range handlers {
 		cfg := h.GetConfig()
-		h.Stop()
 		err := os.WriteFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), cfg, 0664)
 		if err != nil {
 			logger.Printf("Storing config for handler %s error: %v\n", h.id, err)
+		} else {
+			logger.Printf("Config for handler %s stored to %s/%s.json", h.id, dataDirName, h.id)
 		}
 	}
-	logger.Printf("Config dumps are stored into %s\n", dataDirName)
 }
 
 func loadConfigs() {

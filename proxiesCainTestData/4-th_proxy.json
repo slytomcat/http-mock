@@ -1,0 +1,9 @@
+{
+    "ID": "4-th_proxy",
+    "status": "active",
+    "port": 8094,
+    "forward-url": "http://localhost:8093",
+    "passthrough-re": "^$",
+    "url-re": "^.*$",
+    "body-re": "^.*$"
+}

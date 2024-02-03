@@ -88,6 +88,9 @@ func NewHandler(cfg []byte) (h *Handler, err error) {
 	defer func() {
 		if h.status == "active" {
 			err = h.Start()
+			if err != nil {
+				h = nil
+			}
 		}
 	}()
 	if h.id != "" {
@@ -448,7 +451,7 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 		ctx, cancel = context.WithCancel(r.Context())
 	}
 	defer cancel()
-	request, _ := http.NewRequestWithContext(ctx, r.Method, h.forwardURL+url, bytes.NewReader([]byte(body)))
+	request, _ := http.NewRequestWithContext(ctx, r.Method, strings.TrimRight(h.forwardURL+url, "/"), bytes.NewReader([]byte(body)))
 	supportCompression := false
 	for k, v := range headers {
 		if k == "Accept-Encoding" { // it will be automatically added by transport and the response will be automatically decompressed
@@ -487,6 +490,7 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 			h.lock.Lock()
 			h.responses[key] = response
 			h.lock.Unlock()
+			logger.Printf("%s response %x stored", h.id, key)
 		}
 		h.sendSimpleResponse(response, w)
 	}
@@ -499,10 +503,14 @@ func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) 
 	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
 	defer responseWriter.Close()
 	for _, chunk := range response.Response {
-		time.Sleep(time.Duration(chunk.Delay) * time.Millisecond)
-		if _, err := responseWriter.Write([]byte(chunk.Data)); err != nil {
-			logger.Printf("%s error writing to responseWriter: %v\n", h.id, err)
-			return
+		if chunk.Delay > 0 {
+			time.Sleep(time.Duration(chunk.Delay) * time.Millisecond)
+		}
+		if len(chunk.Data) > 0 {
+			if _, err := responseWriter.Write([]byte(chunk.Data)); err != nil {
+				logger.Printf("%s error writing to responseWriter: %v\n", h.id, err)
+				return
+			}
 		}
 	}
 }
@@ -558,6 +566,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 	h.lock.Lock()
 	h.responses[key] = res
 	h.lock.Unlock()
+	logger.Printf("%s response %x stored", h.id, key)
 }
 
 // write headers data to ResponseWriter header cache

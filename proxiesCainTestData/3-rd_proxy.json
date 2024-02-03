@@ -1,0 +1,9 @@
+{
+    "ID": "3-rd_proxy",
+    "status": "active",
+    "port": 8093,
+    "forward-url": "http://localhost:8092",
+    "passthrough-re": "^$",
+    "url-re": "^.*$",
+    "body-re": "^.*$"
+}

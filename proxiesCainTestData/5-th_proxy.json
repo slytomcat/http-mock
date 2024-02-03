@@ -1,0 +1,9 @@
+{
+    "ID": "5-th_proxy",
+    "status": "active",
+    "port": 8095,
+    "forward-url": "http://localhost:8094",
+    "passthrough-re": "^$",
+    "url-re": "^.*$",
+    "body-re": "^.*$"
+}

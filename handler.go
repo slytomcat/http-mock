@@ -30,8 +30,31 @@ var client = http.DefaultClient
 
 // Chunk is a single part of response
 type Chunk struct {
-	Delay int    `json:"delay,omitempty"`
-	Data  string `json:"data,omitempty"`
+	Delay      int    `json:"delay,omitempty"`
+	Data       string `json:"data,omitempty"`
+	compressed bool
+}
+
+func newChunk(data string, delay int) Chunk {
+	c := Chunk{
+		Delay: delay,
+	}
+	if len(data) > minCompressSize {
+		cData, _ := compress([]byte(data))
+		c.Data = string(cData)
+		c.compressed = true
+	} else {
+		c.Data = data
+	}
+	return c
+}
+
+func (c *Chunk) getData() string {
+	if c.compressed {
+		data, _ := decompress([]byte(c.Data))
+		return string(data)
+	}
+	return c.Data
 }
 
 // Response is the single response storage item
@@ -82,7 +105,45 @@ type Status struct {
 	Status string `json:"status"`
 }
 
-// NewHandler is is a single
+func compress(data []byte) ([]byte, error) {
+	compressed := bytes.NewBuffer([]byte{})
+	compressor, err := gzip.NewWriterLevel(compressed, gzip.BestSpeed)
+	if err != nil {
+		return nil, fmt.Errorf("gzip writer creation error: %v", err)
+	}
+	if _, err = compressor.Write(data); err != nil {
+		return nil, fmt.Errorf("writing data into gzip writer error: %v", err)
+	}
+	if err = compressor.Close(); err != nil {
+		return nil, fmt.Errorf("closing gzip writer error: %v", err)
+	}
+	return compressed.Bytes(), nil
+}
+
+func decompress(data []byte) ([]byte, error) {
+	uncompressed := bytes.NewBuffer([]byte{})
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	_, err = io.Copy(uncompressed, reader)
+	if err != nil {
+		return nil, err
+	}
+	if err = reader.Close(); err != nil {
+		return nil, err
+	}
+	return uncompressed.Bytes(), nil
+}
+
+func makeRe(re, defaultRe string) (*regexp.Regexp, error) {
+	if re != "" {
+		return regexp.Compile(re)
+	}
+	return regexp.Compile(defaultRe)
+}
+
+// NewHandler returns new handler made by provided config
 func NewHandler(cfg []byte) (h *Handler, err error) {
 	h = &Handler{}
 	err = h.parseConfig(cfg)
@@ -124,13 +185,6 @@ func (h *Handler) GetStatus() *Status {
 	}
 }
 
-func makeRe(re, defaultRe string) (*regexp.Regexp, error) {
-	if re != "" {
-		return regexp.Compile(re)
-	}
-	return regexp.Compile(defaultRe)
-}
-
 func (h *Handler) parseConfig(data []byte) error {
 	cfg := &Config{}
 	if err := json.Unmarshal(data, cfg); err != nil {
@@ -163,14 +217,13 @@ func (h *Handler) parseConfig(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("forward URL parsing error: %v", err)
 	}
-	responses := make(map[[32]byte]Response, len(cfg.Responses))
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.id = cfg.ID
-	if cfg.Status != "active" {
-		h.status = "inactive"
+	if cfg.Status == "active" {
+		h.status = "active"
 	} else {
-		h.status = cfg.Status
+		h.status = "inactive"
 	}
 	h.host = cfg.Host
 	h.port = cfg.Port
@@ -180,14 +233,18 @@ func (h *Handler) parseConfig(data []byte) error {
 	h.bodyRe = bodyRe
 	h.bodyExRe = bodyExRe
 	h.forwardURL = cfg.ForwardURL
-	h.responses = responses
+	h.responses = make(map[[32]byte]Response, len(cfg.Responses))
 	for i, r := range cfg.Responses {
 		key := h.makeKey(r.URL, r.Body)
-		if _, ok := responses[key]; ok {
+		if _, ok := h.responses[key]; ok {
 			return fmt.Errorf("record #%d is duplicate with one of previous", i)
 		}
-		r.ID = fmt.Sprintf("%X", key)
-		responses[key] = r
+		response := make([]Chunk, len(r.Response))
+		for i, c := range r.Response {
+			response[i] = newChunk(c.Data, c.Delay)
+		}
+		r.Response = response
+		h.responses[key] = r
 	}
 	return nil
 }
@@ -198,8 +255,21 @@ func (h *Handler) GetConfig() []byte {
 	defer h.lock.RUnlock()
 	responses := make([]Response, 0, len(h.responses))
 	for k, v := range h.responses {
-		v.ID = fmt.Sprintf("%X", k)
-		responses = append(responses, v)
+		r := Response{
+			ID:       fmt.Sprintf("%X", k),
+			URL:      v.URL,
+			Body:     v.Body,
+			Code:     v.Code,
+			Headers:  v.Headers,
+			Response: make([]Chunk, len(v.Response)),
+		}
+		for i, c := range v.Response {
+			r.Response[i] = Chunk{
+				Data:  c.getData(),
+				Delay: c.Delay,
+			}
+		}
+		responses = append(responses, r)
 	}
 	c, _ := json.Marshal(Config{
 		ID:            h.id,
@@ -215,6 +285,14 @@ func (h *Handler) GetConfig() []byte {
 		Responses:     responses,
 	})
 	return c
+}
+
+func (h *Handler) makeKey(url string, body string) [32]byte {
+	u := h.urlRe.FindString(url)
+	ue := h.urlExRe.ReplaceAllString(u, "")
+	b := strings.Join(h.bodyRe.FindAllString(body, -1), "")
+	be := h.bodyExRe.ReplaceAllString(b, "")
+	return sha256.Sum256([]byte(ue + be))
 }
 
 // Start starts handler
@@ -360,14 +438,6 @@ func (h *Handler) GetResponse(sID string) ([]byte, error) {
 	return nil, fmt.Errorf("response %s not found", sID)
 }
 
-func (h *Handler) makeKey(url string, body string) [32]byte {
-	u := h.urlRe.FindString(url)
-	ue := h.urlExRe.ReplaceAllString(u, "")
-	b := strings.Join(h.bodyRe.FindAllString(body, -1), "")
-	be := h.bodyExRe.ReplaceAllString(b, "")
-	return sha256.Sum256([]byte(ue + be))
-}
-
 func requestData(r *http.Request) (string, map[string]string, string, error) {
 	defer r.Body.Close()
 	url := r.URL.String()
@@ -425,41 +495,28 @@ func (h *Handler) reportRequest(req, mode, body string, key [32]byte) {
 
 func (h *Handler) sendSimpleResponse(response Response, w http.ResponseWriter) {
 	body := []byte{}
+	var c Chunk
 	if len(response.Response) > 0 {
-		body = []byte(response.Response[0].Data)
+		c = response.Response[0]
 	}
-	for k, v := range response.Headers {
-		if k == "Content-Encoding" && strings.Contains(v, "gzip") {
-			if len(body) <= minCompressSize {
-				continue
-			}
-			compressed, err := compress(body)
-			if err != nil {
-				logger.Warn(h.id, "error", fmt.Sprintf("response body compression error: %v", err))
-				continue
-			}
-			body = compressed
+	setHeaders(w.Header(), response.Headers)
+	ce := w.Header().Get("Content-Encoding")
+	if strings.Contains(ce, "gzip") {
+		if !c.compressed {
+			body = []byte(c.Data)
+			w.Header().Del("Content-Encoding")
+		} else {
+			body = []byte(c.Data) // must be already compressed
 		}
-		w.Header().Set(k, v)
+	} else {
+		if len(ce) > 0 {
+			w.Header().Del("Content-Encoding")
+		}
+		body = []byte(c.getData())
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	w.WriteHeader(response.Code)
 	w.Write(body)
-}
-
-func compress(data []byte) ([]byte, error) {
-	compressed := bytes.NewBuffer([]byte{})
-	compressor, err := gzip.NewWriterLevel(compressed, gzip.BestSpeed)
-	if err != nil {
-		return nil, fmt.Errorf("gzip writer creation error: %v", err)
-	}
-	if _, err = compressor.Write(data); err != nil {
-		return nil, fmt.Errorf("writing data into gzip writer error: %v", err)
-	}
-	if err = compressor.Close(); err != nil {
-		return nil, fmt.Errorf("closing gzip writer error: %v", err)
-	}
-	return compressed.Bytes(), nil
 }
 
 func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
@@ -507,7 +564,7 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 			Body:     body,
 			Code:     resp.StatusCode,
 			Headers:  headers,
-			Response: []Chunk{{Data: string(respBody)}},
+			Response: []Chunk{newChunk(string(respBody), 0)},
 		}
 		if !passthrough {
 			h.lock.Lock()
@@ -530,7 +587,7 @@ func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) 
 			time.Sleep(time.Duration(chunk.Delay) * time.Millisecond)
 		}
 		if len(chunk.Data) > 0 {
-			if _, err := responseWriter.Write([]byte(chunk.Data)); err != nil {
+			if _, err := responseWriter.Write([]byte(chunk.getData())); err != nil {
 				logger.Error(h.id, "error", fmt.Sprintf("error writing to responseWriter: %v", err))
 				return
 			}
@@ -573,7 +630,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 			break
 		}
 		if !passthrough {
-			response = append(response, Chunk{Delay: int(delay.Milliseconds()), Data: string(data)})
+			response = append(response, newChunk(string(data), int(delay.Milliseconds())))
 		}
 	}
 	if passthrough {

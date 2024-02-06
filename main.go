@@ -38,7 +38,7 @@ var (
 )
 
 func init() {
-	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "", "host to start service")
+	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "localhost", "host to start service")
 	rootCmd.Flags().IntVarP(&cmdPort, "port", "p", 8080, "port to start service")
 	rootCmd.Flags().StringVarP(&dataDirName, "data", "d", "_storage", "path for configs storage")
 	rootCmd.Flags().StringVarP(&logLevel, "log", "l", "info", "logging level, one of 'error', 'warn', 'info' or 'debug', default: 'info'")

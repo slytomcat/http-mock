@@ -130,7 +130,7 @@ func TestService(t *testing.T) {
 	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, `{"ID":"test","status":"active","port":8090,"passthrough-re":"^$","url-re":"^.*$","body-re":"^.*$","responses":[{"id":"766C4650CB3E23432941DDCD3D663883BA3AF05C5DA44D79074657EB776B99C3","url":"/url","code":200,"response":[{"data":"ok"}]}]}`, string(body))
+	require.Equal(t, `{"ID":"test","status":"active","port":8090,"passthrough-re":"^$","url-re":"^.*$","url-ex-re":"^$","body-re":"^.*$","body-ex-re":"^$","responses":[{"id":"766C4650CB3E23432941DDCD3D663883BA3AF05C5DA44D79074657EB776B99C3","url":"/url","code":200,"response":[{"data":"ok"}]}]}`, string(body))
 	cfg := body
 	resp, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/stop?id=%s", data.ID), nil)
 	require.NoError(t, err)

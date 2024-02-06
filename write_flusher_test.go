@@ -55,7 +55,7 @@ func TestCachedWritCloser(t *testing.T) {
 func TestCachedWritCloserErrors(t *testing.T) {
 	tError := errors.New("test error")
 	mock := NewMockWriter()
-	wc := NewCachedWriteFlusher(mock, "", mock.Flush, time.Hour)
+	wc := NewCachedWriteFlusher(mock, "test", mock.Flush, time.Hour)
 	mock.closeFunc = func() error {
 		return tError
 	}
@@ -69,7 +69,7 @@ func TestCachedWritCloserErrors(t *testing.T) {
 	require.Equal(t, data, <-mock.Written)
 	require.False(t, mock.isClosed())
 	mock = NewMockWriter()
-	wc = NewCachedWriteFlusher(mock, "", mock.Flush, time.Hour)
+	wc = NewCachedWriteFlusher(mock, "test", mock.Flush, time.Hour)
 	mock.writeFunc = func([]byte) (int, error) {
 		return 0, tError
 	}

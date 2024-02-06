@@ -31,7 +31,6 @@ func TestTestHandler(t *testing.T) {
 	resp, err := TestClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	t.Logf("resp: %+v", resp)
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, longData, string(body))
@@ -59,7 +58,6 @@ func TestTestHandlerShort(t *testing.T) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	t.Logf("resp: %+v, body len: %v", resp, len(body))
 	require.Equal(t, shortData, string(body))
 	require.Equal(t, false, resp.Uncompressed)
 }
@@ -91,14 +89,13 @@ func TestTestHandlerChunked(t *testing.T) {
 	for {
 		line, _, err := reader.ReadLine()
 		if err != nil {
-			t.Logf("error: %v", err)
 			break
 		}
 		delay := time.Since(tick)
 		tick = time.Now()
 		// fmt.Printf("    %v -> '%s'\n", delay, line)
-		assert.InDelta(t, tHandler.chunks[i].delay*time.Millisecond, delay, 1e6, i)
-		assert.Equal(t, tHandler.chunks[i].msg, string(line), 1)
+		assert.InDelta(t, time.Duration(tHandler.chunks[i].Delay)*time.Millisecond, delay, 1e6, i)
+		assert.Equal(t, tHandler.chunks[i].Data, string(line), 1)
 		i++
 	}
 }
@@ -137,8 +134,8 @@ func TestTestHandlerChunkedInterruption(t *testing.T) {
 		delay := time.Since(tick)
 		tick = time.Now()
 		// fmt.Printf("    %v <- '%s'\n", delay, line)
-		assert.InDelta(t, tHandler.chunks[i].delay*time.Millisecond, delay, 4e6, i)
-		assert.Equal(t, tHandler.chunks[i].msg, string(line), 1)
+		assert.InDelta(t, time.Duration(tHandler.chunks[i].Delay)*time.Millisecond, delay, 4e6, i)
+		assert.Equal(t, tHandler.chunks[i].Data, string(line), 1)
 		i++
 		if i >= 7 {
 			resp.Body.Close()

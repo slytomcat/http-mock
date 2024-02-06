@@ -202,8 +202,10 @@ optional parameters:
 - `status` - current handler status `active` - for handler that started and `inactive` when handler is not started. It is possible to start and stop handler by changing this config parameter via [set handler config](#set-handler-config). When a new handler created with `"status": "active"` then it will be automatically started.
 - `forward-url` - where to forward requests to handler. If it not provided the handler can only respond on known requests.
 - `passthrough-re` - regexp that used to pass through requests (without recording). This regexp have to match to the request url joined with the request body. By default it is regexp `^$` that match only empty value. The passthrough mode requires `forward-url` to be set.    
-- `url-re` - regexp that is applied to the request url. It can be used to specify the key part into the request url. By default it is `^.*$` that match to whole URL with parameters.  
+- `url-re` - regexp that is applied to the request url. It can be used to specify the key part into the request url. By default it is `^.*$` that match to whole URL with parameters.
+- `url-ex-re` - regexp for parts that have to be excluded form the url that passed through `url-re` regexp. All matched of this regexp will be submitted on empty string. Default: `^$` that match only empty value and it removes nothing. 
 - `body-re` - the regexp for request body filtering. It can be used to specify the key part into the request body. By default it is `"^.*$"` that match whole body.
+- `body-ex-re` - regexp for parts that have to be excluded form the url that passed through `body-re` regexp. All matched of this regexp will be submitted on empty string. Default: `^$` that match only empty value and it removes nothing. 
 - `responses` - the array with recorded [responses](#respone).
 
 ## response 

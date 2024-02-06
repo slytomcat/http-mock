@@ -53,7 +53,9 @@ type Handler struct {
 	forwardURL    string
 	passthroughRe *regexp.Regexp
 	urlRe         *regexp.Regexp
+	urlExRe       *regexp.Regexp
 	bodyRe        *regexp.Regexp
+	bodyExRe      *regexp.Regexp
 	responses     map[[32]byte]Response
 	server        *http.Server
 	lock          sync.RWMutex
@@ -68,7 +70,9 @@ type Config struct {
 	ForwardURL    string     `json:"forward-url,omitempty"`
 	PassthroughRe string     `json:"passthrough-re,omitempty"`
 	URLRe         string     `json:"url-re,omitempty"`
+	URLExRe       string     `json:"url-ex-re,omitempty"`
 	BodyRe        string     `json:"body-re,omitempty"`
+	BodyExRe      string     `json:"body-ex-re,omitempty"`
 	Responses     []Response `json:"responses,omitempty"`
 }
 
@@ -139,9 +143,17 @@ func (h *Handler) parseConfig(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("URL regexp compiling error: %v", err)
 	}
+	URLExRe, err := makeRe(cfg.URLExRe, "^$")
+	if err != nil {
+		return fmt.Errorf("URL exclude regexp compiling error: %v", err)
+	}
 	bodyRe, err := makeRe(cfg.BodyRe, "^.*$")
 	if err != nil {
 		return fmt.Errorf("body regexp compiling error: %v", err)
+	}
+	bodyExRe, err := makeRe(cfg.BodyExRe, "^$")
+	if err != nil {
+		return fmt.Errorf("body exclude regexp compiling error: %v", err)
 	}
 	passthroughRe, err := makeRe(cfg.PassthroughRe, "^$")
 	if err != nil {
@@ -164,7 +176,9 @@ func (h *Handler) parseConfig(data []byte) error {
 	h.port = cfg.Port
 	h.passthroughRe = passthroughRe
 	h.urlRe = URLRe
+	h.urlExRe = URLExRe
 	h.bodyRe = bodyRe
+	h.bodyExRe = bodyExRe
 	h.forwardURL = cfg.ForwardURL
 	h.responses = responses
 	for i, r := range cfg.Responses {
@@ -195,7 +209,9 @@ func (h *Handler) GetConfig() []byte {
 		PassthroughRe: h.passthroughRe.String(),
 		ForwardURL:    h.forwardURL,
 		URLRe:         h.urlRe.String(),
+		URLExRe:       h.urlExRe.String(),
 		BodyRe:        h.bodyRe.String(),
+		BodyExRe:      h.bodyExRe.String(),
 		Responses:     responses,
 	})
 	return c
@@ -216,19 +232,15 @@ func (h *Handler) Start() error {
 		Addr:    fmt.Sprintf("%s:%d", h.host, h.port),
 		Handler: mux,
 	}
-	forMsg := ""
-	if h.forwardURL != "" {
-		forMsg = " for " + h.forwardURL
-	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- h.server.ListenAndServe() }()
-	logger.Printf("%s starting handler%s on %s:%d\n", h.id, forMsg, h.host, h.port)
+	logger.Info(h.id, "desc", "started", "addr", h.server.Addr, "forward", h.forwardURL)
 	select {
 	case <-time.After(time.Millisecond):
 		h.status = "active"
 		return nil
 	case err := <-errCh:
-		logger.Printf("%s starting error: %v\n", h.id, err)
+		logger.Error(h.id, "error", err)
 		return err
 	}
 }
@@ -255,7 +267,7 @@ func (h *Handler) Stop() error {
 		h.server.Close()
 		return fmt.Errorf("%s handler%s for %s on %s:%d stopping error:%v", h.id, forMsg, h.forwardURL, h.host, h.port, err)
 	}
-	logger.Printf("%s handler%s on %s:%d finished.", h.id, forMsg, h.host, h.port)
+	logger.Info(h.id, "desc", "stopped", "addr", h.server.Addr, "forward", h.forwardURL)
 	return nil
 }
 
@@ -350,8 +362,10 @@ func (h *Handler) GetResponse(sID string) ([]byte, error) {
 
 func (h *Handler) makeKey(url string, body string) [32]byte {
 	u := h.urlRe.FindString(url)
-	b := h.bodyRe.FindAllString(body, -1)
-	return sha256.Sum256([]byte(u + strings.Join(b, "")))
+	ue := h.urlExRe.ReplaceAllString(u, "")
+	b := strings.Join(h.bodyRe.FindAllString(body, -1), "")
+	be := h.bodyExRe.ReplaceAllString(b, "")
+	return sha256.Sum256([]byte(ue + be))
 }
 
 func requestData(r *http.Request) (string, map[string]string, string, error) {
@@ -372,6 +386,7 @@ func requestData(r *http.Request) (string, map[string]string, string, error) {
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	url, headers, body, err := requestData(r)
 	if err != nil {
+		logger.Error(h.id, "req", r.Method+url, "desc", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -380,13 +395,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	response, ok := h.responses[key]
 	h.lock.RUnlock()
 	if !ok && h.forwardURL == "" {
+		logger.Info(h.id, "req", r.Method+url, "desc", "no response found with empty forward-url")
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	passthrough := h.forwardURL != "" && h.passthroughRe.Match(append([]byte(url), body...))
 	if ok && !passthrough {
 		// reply mode
-		logger.Printf("%s %s %s body='%s' replay by resp id=%s", h.id, r.Method, url, body, fmt.Sprintf("%X", key))
+		h.reportRequest(r.Method+url, "replay", body, key)
 		if len(response.Response) > 1 {
 			h.sendChunkedResponse(response, w)
 		} else {
@@ -395,12 +411,16 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// record/passthrough mode
 		if passthrough {
-			logger.Printf("%s %s %s body='%s' passthrough mode", h.id, r.Method, url, body)
+			h.reportRequest(r.Method+url, "passthrough", body, key)
 		} else {
-			logger.Printf("%s %s %s body='%s' store mode, id=%s", h.id, r.Method, url, body, fmt.Sprintf("%X", key))
+			h.reportRequest(r.Method+url, "record", body, key)
 		}
 		h.handleForward(passthrough, r, url, headers, body, key, w)
 	}
+}
+
+func (h *Handler) reportRequest(req, mode, body string, key [32]byte) {
+	logger.Info(h.id, "req", req, "body", body, "mode", mode, "resp-id", fmt.Sprintf("%X", key))
 }
 
 func (h *Handler) sendSimpleResponse(response Response, w http.ResponseWriter) {
@@ -415,7 +435,7 @@ func (h *Handler) sendSimpleResponse(response Response, w http.ResponseWriter) {
 			}
 			compressed, err := compress(body)
 			if err != nil {
-				logger.Printf("%s response body compression error: %v\n", h.id, err)
+				logger.Warn(h.id, "error", fmt.Sprintf("response body compression error: %v", err))
 				continue
 			}
 			body = compressed
@@ -462,6 +482,7 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 	}
 	resp, err := client.Do(request)
 	if err != nil {
+		logger.Error(h.id, "desc", fmt.Sprintf("resp-id: %X, request: %v, error: %v", key, request, err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -471,8 +492,10 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 		headers[k] = strings.Join(v, ", ")
 	}
 	if len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
+		logger.Debug(h.id, "desc", "chunked")
 		h.handleChunkedResponse(passthrough, resp, url, headers, body, key, w)
 	} else {
+		logger.Debug(h.id, "desc", "not chunked")
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 		}
@@ -490,14 +513,14 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 			h.lock.Lock()
 			h.responses[key] = response
 			h.lock.Unlock()
-			logger.Printf("%s response %x stored", h.id, key)
+			logger.Debug(h.id, "response", fmt.Sprintf("%X", key), "desc", "stored")
 		}
 		h.sendSimpleResponse(response, w)
 	}
 }
 
 func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) {
-	sendHeaders(w.Header(), response.Headers)
+	setHeaders(w.Header(), response.Headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(response.Code)
 	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
@@ -508,7 +531,7 @@ func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) 
 		}
 		if len(chunk.Data) > 0 {
 			if _, err := responseWriter.Write([]byte(chunk.Data)); err != nil {
-				logger.Printf("%s error writing to responseWriter: %v\n", h.id, err)
+				logger.Error(h.id, "error", fmt.Sprintf("error writing to responseWriter: %v", err))
 				return
 			}
 		}
@@ -517,14 +540,14 @@ func (h *Handler) sendChunkedResponse(response Response, w http.ResponseWriter) 
 
 func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, url string, headers map[string]string, body string, key [32]byte, w http.ResponseWriter) {
 	reader := bufio.NewReader(resp.Body)
-	sendHeaders(w.Header(), headers)
+	setHeaders(w.Header(), headers)
 	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Del("Content-Length")
 	delimiter := true
 	if w.Header().Get("Content-Type") == "application/json" {
 		delimiter = false
 	}
 	w.WriteHeader(resp.StatusCode)
-	// reader := httputil.NewChunkedReader(resp.Body) //https://paulbellamy.com/2015/06/forwarding-http-chunked-responses-without-reframing-in-go
 	response := []Chunk{}
 	responseWriter := NewCachedWriteFlusher(w, fmt.Sprintf("%s response writer", h.id), w.(http.Flusher).Flush, flushInterval)
 	defer responseWriter.Close()
@@ -533,7 +556,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 		chunk, _, err := reader.ReadLine()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				logger.Printf("%s reading response body error: %s", h.id, err)
+				logger.Error(h.id, "error", fmt.Sprintf("reading response body error: %s", err))
 			}
 			break
 		}
@@ -546,7 +569,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 		}
 		data := bytes.Clone(chunk) // make data clone to avoid data racing
 		if _, err := responseWriter.Write(data); err != nil {
-			logger.Printf("%s writing response to responseWriter error: %s", h.id, err)
+			logger.Error(h.id, "error", fmt.Sprintf("writing response to responseWriter error: %s", err))
 			break
 		}
 		if !passthrough {
@@ -566,11 +589,11 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 	h.lock.Lock()
 	h.responses[key] = res
 	h.lock.Unlock()
-	logger.Printf("%s response %x stored", h.id, key)
+	logger.Info(h.id, "response", fmt.Sprintf("%X", key), "desc", "stored")
 }
 
 // write headers data to ResponseWriter header cache
-func sendHeaders(w http.Header, headers map[string]string) {
+func setHeaders(w http.Header, headers map[string]string) {
 	for k, v := range headers {
 		w.Add(k, v)
 	}

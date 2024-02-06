@@ -7,14 +7,9 @@ import (
 	"time"
 )
 
-type chunk struct {
-	delay time.Duration
-	msg   string
-}
-
 type testHandler struct {
 	response   []byte
-	chunks     []chunk
+	chunks     []Chunk
 	headers    map[string]string
 	code       int
 	handleFunc func(w http.ResponseWriter, r *http.Request)
@@ -25,9 +20,10 @@ func (th *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		th.handleFunc(w, r)
 		return
 	}
-	logger.Printf("testHandler: %s %s", r.Method, r.URL.String())
+	req := fmt.Sprintf("%s %s", r.Method, r.URL.String())
+	logger.Info("testHandler", "req", req)
 	defer func() {
-		logger.Printf("testHandler exits: %s %s", r.Method, r.URL.String())
+		logger.Info("testHandler", "handled", req)
 	}()
 	for k, v := range th.headers {
 		w.Header().Set(k, v)
@@ -40,12 +36,12 @@ func (th *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		flush()
 		// tick := time.Now()
 		for _, c := range th.chunks {
-			time.Sleep(c.delay * time.Millisecond)
+			time.Sleep(time.Duration(c.Delay) * time.Millisecond)
 			// logger.Printf("testHandler :%v -> '%s'\n", time.Since(tick), c.msg)
 			// tick = time.Now()
-			_, err := w.Write([]byte(c.msg + "\n"))
+			_, err := w.Write([]byte(c.Data + "\n"))
 			if err != nil {
-				logger.Printf("testHandler for %s %s writing error: %v ", r.Method, r.URL.String(), err)
+				logger.Error("testHandler", "req", req, "error", err)
 				return
 			}
 			flush()

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,12 +18,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const mgm = "management_service"
+
 var (
 	version     = "local_build"
 	dataDirName string
 	cmdHost     string
 	cmdPort     int
-	logger      = log.New(os.Stdout, "", log.LUTC|log.LstdFlags|log.Lmicroseconds|log.Lmsgprefix)
+	logLevel    string
+	logger      = &slog.Logger{}
 	handlers    = map[string]*Handler{}
 	rootCmd     = &cobra.Command{
 		Use:     "http-mock",
@@ -38,6 +41,13 @@ func init() {
 	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "", "host to start service")
 	rootCmd.Flags().IntVarP(&cmdPort, "port", "p", 8080, "port to start service")
 	rootCmd.Flags().StringVarP(&dataDirName, "data", "d", "_storage", "path for configs storage")
+	rootCmd.Flags().StringVarP(&logLevel, "log", "l", "info", "logging level, one of 'error', 'warn', 'info' or 'debug', default: 'info'")
+}
+
+func initLogging() {
+	logLevelVar := &slog.LevelVar{}
+	logLevelVar.UnmarshalText([]byte(strings.ToUpper(logLevel)))
+	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevelVar}))
 }
 
 func main() {
@@ -55,6 +65,7 @@ func main() {
 	if val, ok := os.LookupEnv("MANAGEMENT_DATA"); ok {
 		dataDirName = val
 	}
+	initLogging()
 	rootCmd.Execute()
 }
 
@@ -66,19 +77,19 @@ func root(cmd *cobra.Command, _ []string) {
 		Addr:    fmt.Sprintf("%s:%d", cmdHost, cmdPort),
 		Handler: mux,
 	}
-	go func() { logger.Println(server.ListenAndServe()) }()
-	logger.Printf("Starting the management service on %s with storage path '%s'\n", server.Addr, dataDirName)
+	go func() { logger.Info(mgm, "desc", server.ListenAndServe()) }()
+	logger.Info(mgm, "addr", server.Addr, "data_dir", dataDirName)
 	sig := make(chan (os.Signal), 3)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
 	s := <-sig // wait for a signal
-	logger.Printf("signal %s received. Starting shutdown...", s.String())
+	logger.Info(mgm, "signal", s.String())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	err := server.Shutdown(ctx)
 	if err != nil {
-		logger.Printf("Shutdown error:%v", err)
+		logger.Error(mgm, "desc", err)
 	}
-	logger.Println("Shutdown finished.")
+	logger.Info(mgm, "desc", "Shutdown finished.")
 	dumpConfigs()
 	for _, h := range handlers {
 		h.Stop()
@@ -88,8 +99,8 @@ func root(cmd *cobra.Command, _ []string) {
 func handleCommands(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		w.Write([]byte(err.Error()))
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
 		return
 	}
 	reqPath := r.Method + r.URL.Path
@@ -226,9 +237,9 @@ func dumpConfigs() {
 		cfg := h.GetConfig()
 		err := os.WriteFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), cfg, 0664)
 		if err != nil {
-			logger.Printf("Storing config for handler %s error: %v\n", h.id, err)
+			logger.Error(mgm, "handler", h.id, "desc", err)
 		} else {
-			logger.Printf("Config for handler %s stored to %s/%s.json", h.id, dataDirName, h.id)
+			logger.Info(mgm, "handler", h.id, "desc", fmt.Sprintf("Config stored to %s/%s.json", dataDirName, h.id))
 		}
 	}
 }
@@ -236,29 +247,28 @@ func dumpConfigs() {
 func loadConfigs() {
 	files, err := os.ReadDir(dataDirName)
 	if err != nil {
-		logger.Printf("reading storage folder %s error: %v\n", dataDirName, err)
+		logger.Error(mgm, "desc", fmt.Sprintf("reading storage folder %s error: %v", dataDirName, err))
 		return
 	}
 	for _, file := range files {
 		fileName := path.Join(dataDirName, file.Name())
 		cfg, err := os.ReadFile(fileName)
 		if err != nil {
-			logger.Printf("reading config file %s error: %v\n", fileName, err)
+			logger.Error(mgm, "desc", fmt.Sprintf("reading config file %s error: %v", fileName, err))
 			continue
 		}
 		id := strings.Split(fileName, ".")[0]
 		if handler, ok := handlers[id]; ok {
 			if err := handler.SetConfig(cfg); err != nil {
-				logger.Printf("setting config from %s for handler %s error: %v\n", fileName, id, err)
+				logger.Error(mgm, "handler", id, "desc", fmt.Sprintf("setting config from %s error: %v", fileName, err))
 			}
 			continue
 		}
 		if handler, err := NewHandler(cfg); err != nil {
-			logger.Printf("setting config from %s for new handler error: %v\n", fileName, err)
+			logger.Error(mgm, "desc", fmt.Sprintf("setting config from %s for new handler error: %v", fileName, err))
 		} else {
 			handlers[handler.id] = handler
 			id = handler.id
 		}
-		logger.Printf("Config dump for handler %s were loaded\n", id)
 	}
 }

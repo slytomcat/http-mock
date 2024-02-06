@@ -11,10 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/signal"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -22,10 +20,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMain(m *testing.M) {
+	initLogging()
+	os.Exit(m.Run())
+}
+
 func TestSendHeaders(t *testing.T) {
 	header := http.Header{}
 	values := map[string]string{"KEY1": "val1", "key2": "val2"}
-	sendHeaders(header, values)
+	setHeaders(header, values)
 	for k, v := range values {
 		require.Equal(t, v, header.Get(k))
 	}
@@ -82,28 +85,28 @@ var (
 	longData  = strings.Repeat("some very long data to compress ", 32) // 1K data
 	shortData = "It's a short data example."                           // 26 bytes data
 
-	testChunks = []chunk{
-		{delay: 30, msg: "data line #1"},
-		{delay: 30, msg: "data line #2"},
-		{delay: 30, msg: "data line #3"},
-		{delay: 30, msg: "data line #4"},
-		{delay: 30, msg: "data line #5"},
-		{delay: 30, msg: "data line #6"},
-		{delay: 30, msg: "data line #7"},
-		{delay: 30, msg: "data line #8"},
-		{delay: 30, msg: "data line #9"},
-		{delay: 30, msg: "data line #10"},
-		{delay: 30, msg: "data line #11"},
-		{delay: 30, msg: "data line #12"},
-		{delay: 30, msg: "data line #13"},
-		{delay: 30, msg: "data line #14"},
-		{delay: 30, msg: "data line #15"},
-		{delay: 30, msg: "data line #16"},
-		{delay: 30, msg: "data line #17"},
-		{delay: 30, msg: "data line #18"},
-		{delay: 30, msg: "data line #19"},
-		{delay: 30, msg: "data line #20"},
-		{delay: 30, msg: "data line #21"},
+	testChunks = []Chunk{
+		{Delay: 30, Data: "data line #1"},
+		{Delay: 30, Data: "data line #2"},
+		{Delay: 30, Data: "data line #3"},
+		{Delay: 30, Data: "data line #4"},
+		{Delay: 30, Data: "data line #5"},
+		{Delay: 30, Data: "data line #6"},
+		{Delay: 30, Data: "data line #7"},
+		{Delay: 30, Data: "data line #8"},
+		{Delay: 30, Data: "data line #9"},
+		{Delay: 30, Data: "data line #10"},
+		{Delay: 30, Data: "data line #11"},
+		{Delay: 30, Data: "data line #12"},
+		{Delay: 30, Data: "data line #13"},
+		{Delay: 30, Data: "data line #14"},
+		{Delay: 30, Data: "data line #15"},
+		{Delay: 30, Data: "data line #16"},
+		{Delay: 30, Data: "data line #17"},
+		{Delay: 30, Data: "data line #18"},
+		{Delay: 30, Data: "data line #19"},
+		{Delay: 30, Data: "data line #20"},
+		{Delay: 30, Data: "data line #21"},
 	}
 	expChunks = []string{
 		"data line #1",
@@ -376,7 +379,7 @@ func TestHandler(t *testing.T) {
 			if tc.cancelConn {
 				resp.Body.Close()
 				cancel()
-				logger.Printf("Connection context canceled")
+				t.Log("Connection context canceled")
 				time.Sleep(50 * time.Millisecond)
 			}
 			cnf := string(h.GetConfig())
@@ -452,14 +455,24 @@ func TestLive(t *testing.T) {
 	resp, err := http.DefaultClient.Get("http://localhost:8080/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
 	require.NoError(t, err)
 	require.Equal(t, 200, resp.StatusCode)
-	sig := make(chan (os.Signal), 3)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
-	select {
-	case <-sig: // wait for a signal
-		return
-	case <-time.After(170 * time.Second):
-		return
-	}
+	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	r := make(map[string]any)
+	require.Greater(t, len(body), 100)
+	err = json.Unmarshal(body, &r)
+	require.NoError(t, err)
+	resp, err = http.DefaultClient.Get("http://localhost:8080/symbols?group=defined_uniswap_v3_arbitrum2&fields=feed-ticker")
+	require.NoError(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+	body, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Greater(t, len(body), 100)
+	r = make(map[string]any)
+	err = json.Unmarshal(body, &r)
+	require.NoError(t, err)
+
 }
 
 func TestHandler_sendSimpleResponse(t *testing.T) {

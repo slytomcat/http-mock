@@ -39,7 +39,7 @@ func NewCachedWriteFlusher(in io.Writer, logPrefix string, flushFunc func(), int
 					return
 				}
 				if _, err := in.Write(data); err != nil {
-					logger.Printf("%s: writing to underlying WC error: %s", logPrefix, err)
+					logger.Error(logPrefix, "desc", fmt.Sprintf("writing to underlying WC error: %s", err))
 					c.lock.Lock()
 					c.closed = true
 					close(input)
@@ -52,7 +52,7 @@ func NewCachedWriteFlusher(in io.Writer, logPrefix string, flushFunc func(), int
 					}
 					return
 				}
-				// logger.Printf("WriteFlusher:<- '%s'\n", data[:len(data)-1])
+				logger.Debug(logPrefix, "desc", "sent", "data", data)
 			case <-ticker.C:
 				flushFunc()
 			}

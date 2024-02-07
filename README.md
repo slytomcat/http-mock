@@ -132,6 +132,17 @@ Flags:
 
 The changed value of `host` and/or `port` will restart active handler. The value of `"status"` is also will affect the handler activity status: value `"active"` will try to run or keep handler running, while value `"inactive"`(or empty value) will stop or keep handler stopped. 
 
+## delete config
+- request
+  - Method: `DELETE`
+  - URL: `/config?id=<handler id>`
+- request example `curl -X DELETE "http://localhost:8080/config?id=my_handler"`
+- response
+  - Code 200: without body means that the handler config was successfully deleted
+  - Code 420: means that provided handler id was not found, the body contain the error description
+
+If handler was active (started) then before deletion it will be stopped. Note that all handler data will be lost. 
+
 ## get single response from handler config
 - request
   - Method: `GET`

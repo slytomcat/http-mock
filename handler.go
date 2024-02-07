@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -271,6 +273,9 @@ func (h *Handler) GetConfig() []byte {
 		}
 		responses = append(responses, r)
 	}
+	slices.SortFunc(responses, func(a, b Response) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 	c, _ := json.Marshal(Config{
 		ID:            h.id,
 		Status:        h.status,

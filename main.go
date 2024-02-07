@@ -89,7 +89,6 @@ func root(cmd *cobra.Command, _ []string) {
 	if err != nil {
 		logger.Error(mgm, "desc", err)
 	}
-	logger.Info(mgm, "desc", "Shutdown finished.")
 	dumpConfigs()
 	for _, h := range handlers {
 		h.Stop()
@@ -159,11 +158,28 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
 		}
+	case "DELETE/config":
+		id := r.URL.Query().Get("id")
+		if h, ok := handlers[id]; ok {
+			if h.status == "active" {
+				if err := h.Stop(); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(err.Error()))
+					return
+				}
+			}
+			delete(handlers, id)
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+		}
 	case "GET/stop":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if err := h.Stop(); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error()))
 				return
 			}
 			w.WriteHeader(http.StatusOK)
@@ -251,21 +267,24 @@ func loadConfigs() {
 		return
 	}
 	for _, file := range files {
-		fileName := path.Join(dataDirName, file.Name())
-		cfg, err := os.ReadFile(fileName)
+		fileName := file.Name()
+		filePath := path.Join(dataDirName, file.Name())
+		cfg, err := os.ReadFile(filePath)
 		if err != nil {
-			logger.Error(mgm, "desc", fmt.Sprintf("reading config file %s error: %v", fileName, err))
+			logger.Error(mgm, "desc", fmt.Sprintf("reading config file %s error: %v", filePath, err))
 			continue
 		}
 		id := strings.Split(fileName, ".")[0]
-		if handler, ok := handlers[id]; ok {
+		handler, ok := handlers[id]
+		if ok {
 			if err := handler.SetConfig(cfg); err != nil {
-				logger.Error(mgm, "handler", id, "desc", fmt.Sprintf("setting config from %s error: %v", fileName, err))
+				logger.Error(mgm, "handler", id, "desc", fmt.Sprintf("setting config from %s error: %v", filePath, err))
 			}
+			logger.Info(mgm, "handler", id, "desc", fmt.Sprintf("config set from  %s", filePath))
 			continue
 		}
 		if handler, err := NewHandler(cfg); err != nil {
-			logger.Error(mgm, "desc", fmt.Sprintf("setting config from %s for new handler error: %v", fileName, err))
+			logger.Error(mgm, "desc", fmt.Sprintf("setting config from %s for new handler error: %v", filePath, err))
 		} else {
 			handlers[handler.id] = handler
 			id = handler.id

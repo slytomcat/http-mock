@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const mgm = "management_service"
+const (
+	mgm            = "management_service"
+	defaultCmdPort = 8080
+)
 
 var (
 	version     = "local_build"
@@ -39,7 +43,7 @@ var (
 
 func init() {
 	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "localhost", "host to start service")
-	rootCmd.Flags().IntVarP(&cmdPort, "port", "p", 8080, "port to start service")
+	rootCmd.Flags().IntVarP(&cmdPort, "port", "p", defaultCmdPort, "port to start service")
 	rootCmd.Flags().StringVarP(&dataDirName, "data", "d", "_storage", "path for configs storage")
 	rootCmd.Flags().StringVarP(&logLevel, "log", "l", "info", "logging level, one of 'error', 'warn', 'info' or 'debug', default: 'info'")
 }
@@ -138,8 +142,30 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 	case "GET/config":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
+			init, rest := h.GetConfig()
+			defer func() {
+				for range rest {
+				} // drain rest
+			}()
+			noRest := true
+			part := []byte{}
+			select {
+			case part = <-rest:
+			default:
+				noRest = false
+			}
+			if noRest {
+				w.WriteHeader(http.StatusOK)
+				w.Write(init)
+				return
+			}
+			w.Header().Set("Transfer-Encoding", "chunked")
 			w.WriteHeader(http.StatusOK)
-			w.Write(h.GetConfig())
+			w.Write(init)
+			w.Write(part)
+			for part = range rest {
+				w.Write(part)
+			}
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
@@ -248,26 +274,77 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 
 func dumpConfigs() {
 	_ = os.MkdirAll(dataDirName, 01775)
-
 	for _, h := range handlers {
-		cfg := h.GetConfig()
-		err := os.WriteFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), cfg, 0664)
+		file, err := os.OpenFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0664)
 		if err != nil {
 			logger.Error(mgm, "handler", h.id, "desc", err)
-		} else {
-			logger.Info(mgm, "handler", h.id, "desc", fmt.Sprintf("Config stored to %s/%s.json", dataDirName, h.id))
+			return
 		}
+		defer file.Close()
+		h.lock.RLock()
+		defer h.lock.RUnlock()
+		c := Config{
+			ID:            h.id,
+			Status:        h.status,
+			Host:          h.host,
+			Port:          h.port,
+			ForwardURL:    h.forwardURL,
+			PassthroughRe: h.passthroughRe.String(),
+			URLRe:         h.urlRe.String(),
+			URLExRe:       h.urlExRe.String(),
+			BodyRe:        h.bodyRe.String(),
+			BodyExRe:      h.bodyExRe.String(),
+		}
+		cfg, _ := json.Marshal(c)
+		cfg, _ = bytes.CutSuffix(cfg, []byte("}"))
+		cfg = append(cfg, []byte(`,"responses":[`)...)
+		_, err = file.Write(cfg)
+		if err != nil {
+			logger.Error(mgm, "handler", h.id, "desc", err)
+			return
+		}
+		for k, v := range h.responses {
+			r := Response{
+				ID:       fmt.Sprintf("%X", k),
+				URL:      v.URL,
+				Body:     v.Body,
+				Code:     v.Code,
+				Headers:  v.Headers,
+				Response: make([]Chunk, len(v.Response)),
+			}
+			for i, c := range v.Response {
+				r.Response[i] = Chunk{
+					Delay: c.Delay,
+					Data:  c.getData(),
+				}
+			}
+			cfg, _ = json.Marshal(r)
+			_, err = file.Write(cfg)
+			if err != nil {
+				logger.Error(mgm, "handler", h.id, "desc", err)
+				return
+			}
+		}
+		_, err = file.Write([]byte("]}"))
+		if err != nil {
+			logger.Error(mgm, "handler", h.id, "desc", err)
+			return
+		}
+		logger.Info(mgm, "handler", h.id, "desc", fmt.Sprintf("config stored to %s/%s.json", dataDirName, h.id))
 	}
 }
 
 func loadConfigs() {
 	files, err := os.ReadDir(dataDirName)
 	if err != nil {
-		logger.Error(mgm, "desc", fmt.Sprintf("reading storage folder %s error: %v", dataDirName, err))
+		logger.Warn(mgm, "desc", fmt.Sprintf("reading storage folder %s error: %v", dataDirName, err))
 		return
 	}
 	for _, file := range files {
 		fileName := file.Name()
+		if !strings.HasSuffix(fileName, ".json") {
+			continue
+		}
 		filePath := path.Join(dataDirName, file.Name())
 		cfg, err := os.ReadFile(filePath)
 		if err != nil {
@@ -280,7 +357,7 @@ func loadConfigs() {
 			if err := handler.SetConfig(cfg); err != nil {
 				logger.Error(mgm, "handler", id, "desc", fmt.Sprintf("setting config from %s error: %v", filePath, err))
 			}
-			logger.Info(mgm, "handler", id, "desc", fmt.Sprintf("config set from  %s", filePath))
+			logger.Info(mgm, "handler", id, "desc", fmt.Sprintf("config set from %s", filePath))
 			continue
 		}
 		if handler, err := NewHandler(cfg); err != nil {

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -252,31 +251,10 @@ func (h *Handler) parseConfig(data []byte) error {
 }
 
 // GetConfig returns Handler config
-func (h *Handler) GetConfig() []byte {
+func (h *Handler) GetConfig() ([]byte, chan []byte) {
 	h.lock.RLock()
 	defer h.lock.RUnlock()
-	responses := make([]Response, 0, len(h.responses))
-	for k, v := range h.responses {
-		r := Response{
-			ID:       fmt.Sprintf("%X", k),
-			URL:      v.URL,
-			Body:     v.Body,
-			Code:     v.Code,
-			Headers:  v.Headers,
-			Response: make([]Chunk, len(v.Response)),
-		}
-		for i, c := range v.Response {
-			r.Response[i] = Chunk{
-				Data:  c.getData(),
-				Delay: c.Delay,
-			}
-		}
-		responses = append(responses, r)
-	}
-	slices.SortFunc(responses, func(a, b Response) int {
-		return cmp.Compare(a.ID, b.ID)
-	})
-	c, _ := json.Marshal(Config{
+	initPart, _ := json.Marshal(Config{
 		ID:            h.id,
 		Status:        h.status,
 		Host:          h.host,
@@ -287,9 +265,73 @@ func (h *Handler) GetConfig() []byte {
 		URLExRe:       h.urlExRe.String(),
 		BodyRe:        h.bodyRe.String(),
 		BodyExRe:      h.bodyExRe.String(),
-		Responses:     responses,
 	})
-	return c
+	rest := make(chan []byte, 6)
+	if len(h.responses) == 0 {
+		close(rest)
+		return initPart, rest
+	}
+	initPart, _ = bytes.CutSuffix(initPart, []byte("}"))
+	initPart = append(initPart, []byte(`,"responses":[`)...)
+	go func() {
+		repRef := make(map[string][32]byte, len(h.responses))
+		idx := make([]string, 0, len(h.responses))
+		for k := range h.responses {
+			sKey := fmt.Sprintf("%X", k)
+			repRef[sKey] = k
+			idx = append(idx, sKey)
+		}
+		slices.Sort(idx)
+		r := bytes.NewBuffer(nil)
+		for _, sKey := range idx {
+			k := repRef[sKey]
+			v := h.responses[k]
+			p, _ := json.Marshal(Response{
+				ID:      fmt.Sprintf("%X", k),
+				URL:     v.URL,
+				Body:    v.Body,
+				Code:    v.Code,
+				Headers: v.Headers,
+			})
+			p, _ = bytes.CutSuffix(p, []byte("}"))
+			r.Write(p)
+			r.WriteString(`,"response":[`)
+			for i, c := range v.Response {
+				r.Write([]byte(`{`))
+				if c.Delay > 0 {
+					r.WriteString(fmt.Sprintf(`"delay":%d`, c.Delay))
+				}
+				data := c.getData()
+				if len(data) > 0 {
+					if c.Delay > 0 {
+						r.WriteString(",")
+					}
+					r.WriteString(`"data":"`)
+					time.Sleep(time.Millisecond)
+					if len(data)+r.Len() > 4096 {
+						rest <- r.Bytes()
+						r.Reset()
+					}
+					b, _ := json.Marshal(data)
+					b = b[1 : len(b)-1]
+					if len(b) >= 4096 {
+						rest <- b
+					} else {
+						r.Write(b)
+					}
+					r.WriteString(`"}`)
+					if i != len(v.Response)-1 {
+						r.Write([]byte(`,`))
+					}
+				}
+			}
+			r.Write([]byte(`]}]}`))
+			rest <- r.Bytes()[:]
+			r.Reset()
+			close(rest)
+		}
+	}()
+	return initPart, rest
 }
 
 func (h *Handler) makeKey(url string, body string) [32]byte {
@@ -365,13 +407,14 @@ func (h *Handler) SetConfig(cfg []byte) error {
 	if err != nil {
 		return err
 	}
-	if (h.port != pPort || h.host != pHost || h.status == "inactive") && active {
+	newStatus := h.status
+	if (h.port != pPort || h.host != pHost || newStatus == "inactive") && active {
 		if err := h.Stop(); err != nil {
 			return err
 		}
 		active = false
 	}
-	if h.status == "active" && !active {
+	if newStatus == "active" && !active {
 		if err := h.Start(); err != nil {
 			return err
 		}
@@ -392,13 +435,17 @@ func (h *Handler) UpdateResponse(update []byte) error {
 	if _, ok := h.responses[newKey]; !ok {
 		h.lock.Lock()
 		defer h.lock.Unlock()
-		h.responses[h.makeKey(resp.URL, resp.Body)] = Response{
+		r := Response{
 			URL:      resp.URL,
 			Body:     resp.Body,
 			Code:     resp.Code,
 			Headers:  resp.Headers,
-			Response: resp.Response,
+			Response: make([]Chunk, len(resp.Response)),
 		}
+		for i, c := range resp.Response {
+			r.Response[i] = newChunk(c.Data, c.Delay)
+		}
+		h.responses[h.makeKey(resp.URL, resp.Body)] = r
 		return nil
 	}
 	return fmt.Errorf("update has key that overwrites other response")
@@ -438,7 +485,21 @@ func (h *Handler) GetResponse(sID string) ([]byte, error) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	if r, ok := h.responses[*key]; ok {
-		return json.Marshal(r)
+		resp := Response{
+			ID:       fmt.Sprintf("%X", *key),
+			URL:      r.URL,
+			Body:     r.Body,
+			Code:     r.Code,
+			Headers:  r.Headers,
+			Response: make([]Chunk, len(r.Response)),
+		}
+		for i, c := range r.Response {
+			resp.Response[i] = Chunk{
+				Data:  c.getData(),
+				Delay: c.Delay,
+			}
+		}
+		return json.Marshal(resp)
 	}
 	return nil, fmt.Errorf("response %s not found", sID)
 }
@@ -618,7 +679,7 @@ func (h *Handler) handleChunkedResponse(passthrough bool, resp *http.Response, u
 		chunk, _, err := reader.ReadLine()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				logger.Error(h.id, "error", fmt.Sprintf("reading response body error: %s", err))
+				logger.Error(h.id, "error", fmt.Sprintf("reading response body error:%s\n", err))
 			}
 			break
 		}

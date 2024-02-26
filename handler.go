@@ -283,7 +283,7 @@ func (h *Handler) GetConfig() ([]byte, chan []byte) {
 		}
 		slices.Sort(idx)
 		r := bytes.NewBuffer(nil)
-		for _, sKey := range idx {
+		for j, sKey := range idx {
 			k := repRef[sKey]
 			v := h.responses[k]
 			p, _ := json.Marshal(Response{
@@ -309,13 +309,14 @@ func (h *Handler) GetConfig() ([]byte, chan []byte) {
 					r.WriteString(`"data":"`)
 					time.Sleep(time.Millisecond)
 					if len(data)+r.Len() > 4096 {
-						rest <- r.Bytes()
+						rest <- []byte(r.String())
 						r.Reset()
 					}
 					b, _ := json.Marshal(data)
 					b = b[1 : len(b)-1]
 					if len(b) >= 4096 {
 						rest <- b
+						r.Reset()
 					} else {
 						r.Write(b)
 					}
@@ -325,11 +326,15 @@ func (h *Handler) GetConfig() ([]byte, chan []byte) {
 					}
 				}
 			}
-			r.Write([]byte(`]}]}`))
-			rest <- r.Bytes()[:]
-			r.Reset()
-			close(rest)
+			r.WriteString("]}")
+			if j != len(h.responses)-1 {
+				r.WriteString(",")
+			} else {
+				r.WriteString("]}")
+				rest <- []byte(r.String())
+			}
 		}
+		close(rest)
 	}()
 	return initPart, rest
 }

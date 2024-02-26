@@ -462,27 +462,8 @@ func TestLive(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	defer h.Stop()
-	resp, err := http.DefaultClient.Get("http://localhost:8080/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
-	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	r := make(map[string]any)
-	require.Greater(t, len(body), 100)
-	err = json.Unmarshal(body, &r)
-	require.NoError(t, err)
-	resp, err = http.DefaultClient.Get("http://localhost:8080/symbols?group=defined_uniswap_v3_arbitrum2&fields=feed-ticker")
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
-	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
-	body, err = io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Greater(t, len(body), 100)
-	r = make(map[string]any)
-	err = json.Unmarshal(body, &r)
-	require.NoError(t, err)
-
+	checkCorrectJSONResponse(t, "http://localhost:8080/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+	checkCorrectJSONResponse(t, "http://localhost:8080/symbols?group=defined_uniswap_v3_arbitrum2&fields=feed-ticker")
 }
 
 func TestHandler_sendSimpleResponse(t *testing.T) {
@@ -594,14 +575,93 @@ var bigChunksConfig = `{
 	]
 }`
 
+var big2ChunksConfig = `{
+	"ID": "hub0",
+	"status": "active",
+	"port": 8086,
+	"passthrough-re":"^$",
+	"url-re":"^.*$",
+	"url-ex-re":"^$",
+	"body-re":"^.*$",
+	"body-ex-re":"^$",
+	"responses": [
+		{
+			"id": "3A4CAD37B2985E4D47EC61D00A2241E3997C1AEAB9A37299217004892FEE7A3E",
+			"url": "/symbols?domain=tv\u0026prefix=BINANCE\u0026type=swap,futures,spot\u0026fields=base-currency-id,currency-id,typespecs",
+			"code": 200,
+			"headers": {
+				"Content-Type": "application/json"
+			},
+			"response": [
+				{"data":"{\"fields\":[\"base-currency-id\",\"currency-id\",\"typespecs\"],\"symbols\":[{\"f\":[\"XTVC1INCH\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:1INCHUSD\"},{\"f\":[\"XTVCAAVE\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AAVEUSD\"},{\"f\":[\"XTVCACA\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ACAUSD\"},{\"f\":[\"XTVCACEF\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ACEUSD\"},{\"f\":[\"XTVCACH\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ACHUSD\"},{\"f\":[\"XTVCADA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ADAUSD\"},{\"f\":[\"XTVCADX\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ADXUSD\"},{\"f\":[\"XTVCAERGO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AERGOUSD\"},{\"f\":[\"XTVCAGIX\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AGIXUSD\"},{\"f\":[\"XTVCAGLD\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AGLDUSD\"},{\"f\":[\"XTVCAISL\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AIUSD\"},{\"f\":[\"XTVCALCX\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ALCXUSD\"},{\"f\":[\"XTVCALGO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALGOUSD\"},{\"f\":[\"XTVCALICE\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALICEUSD\"},{\"f\":[\"XTVCALPACA\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ALPACAUSD\"},{\"f\":[\"XTVCALPHA\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ALPHAUSD\"},{\"f\":[\"XTVCALPINE\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALPINEUSD\"},{\"f\":[\"XTVCALTL\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALTUSD\"},{\"f\":[\"XTVCAMB\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AMBUSD\"},{\"f\":[\"XTVCANKR\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ANKRUSD\"},{\"f\":[\"XTVCANT\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ANTUSD\"},{\"f\":[\"XTVCAPE\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:APEUSD\"},{\"f\":[\"XTVCAPI3\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:API3USD\"},{\"f\":[\"XTVCAPTO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:APTUSD\"},{\"f\":[\"XTVCARDR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARDRUSD\"},{\"f\":[\"XTVCARKM\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARKMUSD\"},{\"f\":[\"XTVCARPA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARPAUSD\"},{\"f\":[\"XTVCAR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARUSD\"},{\"f\":[\"XTVCASTR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ASTRUSD\"},{\"f\":[\"XTVCAST\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ASTUSD\"},{\"f\":[\"XTVCATA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ATAUSD\"},{\"f\":[\"XTVCATOM\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ATOMUSD\"},{\"f\":[\"XTVCAUCTION\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AUCTIONUSD\"},{\"f\":[\"XTVCAUDIO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AUDIOUSD\"},{\"f\":[\"XTVCAVA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AVAUSD\"},{\"f\":[\"XTVCAVAX\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AVAXUSD\"},{\"f\":[\"XTVCAXS\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AXSUSD\"},{\"f\":[\"XTVCBADGER\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BADGERUSD\"},{\"f\":[\"XTVCBAKE\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BAKEUSD\"},{\"f\":[\"XTVCBAL\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BALUSD\"},{\"f\":[\"XTVCBAND\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BANDUSD\"},{\"f\":[\"XTVCBAT\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BATUSD\"},{\"f\":[\"XTVCBCH\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BCHUSD\"},{\"f\":[\"XTVCBEL\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BELUSD\"},{\"f\":[\"XTVCBETA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BETAUSD\"},{\"f\":[\"XTVCBICO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BICOUSD\"},{\"f\":[\"XTVCBLUR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BLURUSD\"},{\"f\":[\"XTVCBLZ\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BLZUSD\"},{\"f\":[\"XTVCBNB\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BNBUSD\"},{\"f\":[\"XTVCBNT\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BNTUSD\"},{\"f\":[\"XTVCBNXB\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BNXUSD\"},{\"f\":[\"XTVCBOND\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BONDUSD\"},{\"f\":[\"XTVCBTC\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BTCUSD\"},{\"f\":[\"XTVCC98\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:C98USD\"},{\"f\":[\"XTVCCAKE\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:CAKEUSD\"},{\"f\":[\"XTVCCELO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:CELOUSD\"},{\"f\":[\"XTVCCELR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:CELRUSD\"},{\"f\":[\"XTVCCFX\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:CFXUSD\"},{\"f\":[\"XTVCCHESS\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:CHESSUSD\"}],\"time\":\"2024-02-01T15:06:38Z\"}"}
+			]
+		},
+		{
+			"id": "5BCF0FC05ADCE4DC7569838F77840666096BE319D14954C463ED3F5734B7192D",
+			"url": "/symbols?domain=tv\u0026prefix=BINANCE\u0026fields=base-currency-id,currency-id,typespecs",
+			"code": 200,
+			"headers": {
+				"Content-Type": "application/json"
+			},
+			"response": [
+				{"data":"{\"fields\":[\"base-currency-id\",\"currency-id\",\"typespecs\"],\"symbols\":[{\"f\":[\"XTVC1INCH\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:1INCHUSD\"},{\"f\":[\"XTVCAAVE\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AAVEUSD\"},{\"f\":[\"XTVCACA\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ACAUSD\"},{\"f\":[\"XTVCACEF\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ACEUSD\"},{\"f\":[\"XTVCACH\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ACHUSD\"},{\"f\":[\"XTVCADA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ADAUSD\"},{\"f\":[\"XTVCADX\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ADXUSD\"},{\"f\":[\"XTVCAERGO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AERGOUSD\"},{\"f\":[\"XTVCAGIX\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AGIXUSD\"},{\"f\":[\"XTVCAGLD\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AGLDUSD\"},{\"f\":[\"XTVCAISL\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AIUSD\"},{\"f\":[\"XTVCALCX\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ALCXUSD\"},{\"f\":[\"XTVCALGO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALGOUSD\"},{\"f\":[\"XTVCALICE\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALICEUSD\"},{\"f\":[\"XTVCALPACA\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ALPACAUSD\"},{\"f\":[\"XTVCALPHA\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ALPHAUSD\"},{\"f\":[\"XTVCALPINE\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALPINEUSD\"},{\"f\":[\"XTVCALTL\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ALTUSD\"},{\"f\":[\"XTVCAMB\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AMBUSD\"},{\"f\":[\"XTVCANKR\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ANKRUSD\"},{\"f\":[\"XTVCANT\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ANTUSD\"},{\"f\":[\"XTVCAPE\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:APEUSD\"},{\"f\":[\"XTVCAPI3\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:API3USD\"},{\"f\":[\"XTVCAPTO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:APTUSD\"},{\"f\":[\"XTVCARDR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARDRUSD\"},{\"f\":[\"XTVCARKM\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARKMUSD\"},{\"f\":[\"XTVCARPA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARPAUSD\"},{\"f\":[\"XTVCAR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ARUSD\"},{\"f\":[\"XTVCASTR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ASTRUSD\"},{\"f\":[\"XTVCAST\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:ASTUSD\"},{\"f\":[\"XTVCATA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ATAUSD\"},{\"f\":[\"XTVCATOM\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:ATOMUSD\"},{\"f\":[\"XTVCAUCTION\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AUCTIONUSD\"},{\"f\":[\"XTVCAUDIO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AUDIOUSD\"},{\"f\":[\"XTVCAVA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AVAUSD\"},{\"f\":[\"XTVCAVAX\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:AVAXUSD\"},{\"f\":[\"XTVCAXS\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:AXSUSD\"},{\"f\":[\"XTVCBADGER\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BADGERUSD\"},{\"f\":[\"XTVCBAKE\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BAKEUSD\"},{\"f\":[\"XTVCBAL\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BALUSD\"},{\"f\":[\"XTVCBAND\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BANDUSD\"},{\"f\":[\"XTVCBAT\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BATUSD\"},{\"f\":[\"XTVCBCH\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BCHUSD\"},{\"f\":[\"XTVCBEL\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BELUSD\"},{\"f\":[\"XTVCBETA\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BETAUSD\"},{\"f\":[\"XTVCBICO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BICOUSD\"},{\"f\":[\"XTVCBLUR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BLURUSD\"},{\"f\":[\"XTVCBLZ\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BLZUSD\"},{\"f\":[\"XTVCBNB\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BNBUSD\"},{\"f\":[\"XTVCBNT\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BNTUSD\"},{\"f\":[\"XTVCBNXB\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BNXUSD\"},{\"f\":[\"XTVCBOND\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:BONDUSD\"},{\"f\":[\"XTVCBTC\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:BTCUSD\"},{\"f\":[\"XTVCC98\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:C98USD\"},{\"f\":[\"XTVCCAKE\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:CAKEUSD\"},{\"f\":[\"XTVCCELO\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:CELOUSD\"},{\"f\":[\"XTVCCELR\",\"USD\",\"crypto,synthetic\"],\"s\":\"BINANCE:CELRUSD\"},{\"f\":[\"XTVCCFX\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:CFXUSD\"},{\"f\":[\"XTVCCHESS\",\"USD\",\"crypto,defi,synthetic\"],\"s\":\"BINANCE:CHESSUSD\"}],\"time\":\"2024-02-01T15:06:38Z\"}"}
+			]
+		}
+	]
+}`
+
+func srinkFormating(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(s, " ", ""), "\n", ""), "\t", "")
+}
+
+func correctJSON(data []byte) bool {
+	r := make(map[string]any)
+	err := json.Unmarshal(data, &r)
+	return err == nil
+}
+
+func makeRequest(req string) (int, []byte, http.Header, error) {
+	resp, err := http.DefaultClient.Get(req)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	return resp.StatusCode, body, resp.Header, nil
+}
+
+func checkCorrectJSONResponse(t *testing.T, url string) {
+	code, body, header, err := makeRequest(url)
+	require.NoError(t, err)
+	require.Equal(t, 200, code)
+	require.Equal(t, "application/json", header.Get("Content-Type"))
+	require.True(t, correctJSON(body))
+}
+
 func TestBigChuncsConfig(t *testing.T) {
-	t.Skip("DATARACE? WHY!!!!")
 	h, err := NewHandler([]byte(bigChunksConfig))
 	require.NoError(t, err)
 	require.NotNil(t, h)
+	require.Len(t, h.responses, 1)
 	defer h.Stop()
 	cfg := readConfig(h.GetConfig())
-	require.Equal(t, strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(bigChunksConfig, " ", ""), "\n", ""), "\t", ""), cfg)
+	require.Equal(t, srinkFormating(bigChunksConfig), cfg)
+	checkCorrectJSONResponse(t, "http://localhost:8086/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+}
+
+func TestBig2ChuncsConfig(t *testing.T) {
+	h, err := NewHandler([]byte(big2ChunksConfig))
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	require.Len(t, h.responses, 2)
+	defer h.Stop()
+	cfg := readConfig(h.GetConfig())
+	require.Equal(t, srinkFormating(big2ChunksConfig), cfg)
+	checkCorrectJSONResponse(t, "http://localhost:8086/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+	checkCorrectJSONResponse(t, "http://localhost:8086/symbols?domain=tv&prefix=BINANCE&fields=base-currency-id,currency-id,typespecs")
 }
 
 func TestRealBigDataFromConfig(t *testing.T) {
@@ -609,27 +669,12 @@ func TestRealBigDataFromConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	defer h.Stop()
-	resp, err := http.DefaultClient.Get("http://localhost:8086/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, 200, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	// t.Logf("%s", body)
-	// require.Len(t, body, 141902)
-	r := make(map[string]any)
-	err = json.Unmarshal(body, &r)
-	require.NoError(t, err)
+	checkCorrectJSONResponse(t, "http://localhost:8086/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
 	require.NoError(t, h.Stop())
 	require.NoError(t, h.SetConfig([]byte(bigChunksConfig)))
 	newCfg := strings.ReplaceAll(bigChunksConfig, `"port": 8086`, `"port": 8090`)
 	require.NoError(t, h.SetConfig([]byte(newCfg)))
-	resp, err = http.DefaultClient.Get("http://localhost:8090/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, 200, resp.StatusCode)
-	body, err = io.ReadAll(resp.Body)
-	require.NoError(t, err)
+	checkCorrectJSONResponse(t, "http://localhost:8090/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
 }
 
 func TestRealBigDataFromExtSource(t *testing.T) {
@@ -641,17 +686,13 @@ func TestRealBigDataFromExtSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, h2)
 	defer h2.Stop()
-	resp, err := http.DefaultClient.Get("http://localhost:8090/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
+	code, body, _, err := makeRequest("http://localhost:8090/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
 	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, 200, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
+	require.Equal(t, 200, code)
 	require.NoError(t, err)
 	// t.Logf("%s", body)
 	// require.Len(t, body, 141902)
-	r := make(map[string]any)
-	err = json.Unmarshal(body, &r)
-	require.NoError(t, err)
+	require.True(t, correctJSON(body))
 	// cfg := h2.GetConfig()
 	// t.Logf("second config: %s", cfg)
 	key := h2.makeKey("/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs", "")

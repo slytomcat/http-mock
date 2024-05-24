@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -281,54 +280,18 @@ func dumpConfigs() {
 			return
 		}
 		defer file.Close()
-		h.lock.RLock()
-		defer h.lock.RUnlock()
-		c := Config{
-			ID:            h.id,
-			Status:        h.status,
-			Host:          h.host,
-			Port:          h.port,
-			ForwardURL:    h.forwardURL,
-			PassthroughRe: h.passthroughRe.String(),
-			URLRe:         h.urlRe.String(),
-			URLExRe:       h.urlExRe.String(),
-			BodyRe:        h.bodyRe.String(),
-			BodyExRe:      h.bodyExRe.String(),
-		}
-		cfg, _ := json.Marshal(c)
-		cfg, _ = bytes.CutSuffix(cfg, []byte("}"))
-		cfg = append(cfg, []byte(`,"responses":[`)...)
-		_, err = file.Write(cfg)
+		part1, rest := h.GetConfig()
+		_, err = file.Write(part1)
 		if err != nil {
 			logger.Error(mgm, "handler", h.id, "desc", err)
 			return
 		}
-		for k, v := range h.responses {
-			r := Response{
-				ID:       fmt.Sprintf("%X", k),
-				URL:      v.URL,
-				Body:     v.Body,
-				Code:     v.Code,
-				Headers:  v.Headers,
-				Response: make([]Chunk, len(v.Response)),
-			}
-			for i, c := range v.Response {
-				r.Response[i] = Chunk{
-					Delay: c.Delay,
-					Data:  c.getData(),
-				}
-			}
-			cfg, _ = json.Marshal(r)
-			_, err = file.Write(cfg)
+		for part := range rest {
+			_, err = file.Write(part)
 			if err != nil {
 				logger.Error(mgm, "handler", h.id, "desc", err)
 				return
 			}
-		}
-		_, err = file.Write([]byte("]}"))
-		if err != nil {
-			logger.Error(mgm, "handler", h.id, "desc", err)
-			return
 		}
 		logger.Info(mgm, "handler", h.id, "desc", fmt.Sprintf("config stored to %s/%s.json", dataDirName, h.id))
 	}

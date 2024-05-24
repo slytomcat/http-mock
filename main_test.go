@@ -322,10 +322,9 @@ func copyFolder(srcDir, dstDir string) error {
 }
 
 func TestProxiesChain(t *testing.T) {
-	testStorageFolder := "test_storage"
+	testStorageFolder := t.TempDir()
 	testDataSourceFolder := "proxiesCainTestData"
 	require.NoError(t, copyFolder(testDataSourceFolder, testStorageFolder))
-	defer os.RemoveAll(testStorageFolder)
 	t.Setenv("MANAGEMENT_DATA", testStorageFolder)
 	t.Setenv("MANAGEMENT_PORT", "8080")
 	t.Setenv("MANAGEMENT_HOST", "localhost")

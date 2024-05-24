@@ -307,7 +307,7 @@ func (h *Handler) GetConfig() ([]byte, chan []byte) {
 						r.WriteString(",")
 					}
 					r.WriteString(`"data":"`)
-					time.Sleep(time.Millisecond)
+					// time.Sleep(time.Millisecond)
 					if len(data)+r.Len() > 4096 {
 						rest <- []byte(r.String())
 						r.Reset()

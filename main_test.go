@@ -17,10 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	notExistingPath = "/notExists/path"
-)
-
 func cleanUp() func() {
 	storedDataDirName := dataDirName
 	storedCmdHost := cmdHost
@@ -125,11 +121,11 @@ func TestService(t *testing.T) {
 	status, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, status)
-	require.Equal(t, "config parsing error: json parsing error: unexpected end of JSON input", string(body))
+	require.Equal(t, "config parsing error: json parsing error: EOF", string(body))
 	status, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", bytes.NewReader([]byte(`}`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, status)
-	require.Equal(t, "config parsing error: json parsing error: invalid character '}' looking for beginning of value", string(body))
+	require.Equal(t, "config parsing error: json parsing error: readObjectStart: expect { or n, but found }, error found in #1 byte of ...|}|..., bigger context ...|}|...", string(body))
 	status, body, err = executeRequest(http.MethodPost, "http://localhost:8080/new", bytes.NewReader([]byte(`{"id":"test","port":8090, "responses":[{"url": "/url", "code":200, "response":[{"data":"ok"}]},{"url": "/url", "code":200, "response":[{"data":"ok"}]}]}`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, status)
@@ -186,7 +182,7 @@ func TestService(t *testing.T) {
 	status, body, err = executeRequest(http.MethodPost, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), bytes.NewReader([]byte(`}{`)))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, status)
-	require.Equal(t, "json parsing error: invalid character '}' looking for beginning of value", string(body))
+	require.Equal(t, "json parsing error: readObjectStart: expect { or n, but found }, error found in #1 byte of ...|}{|..., bigger context ...|}{|...", string(body))
 	status, body, err = executeRequest(http.MethodPost, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), bytes.NewReader(cfg))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, status, string(body))

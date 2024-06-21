@@ -45,7 +45,7 @@ func TestParseKeyErrors(t *testing.T) {
 func TestHandlerSetConfig(t *testing.T) {
 	h := &Handler{host: "localhost", port: 8080}
 	config := `{"host": "localhost", "port": 8080}`
-	err := h.SetConfig([]byte(config))
+	err := h.SetConfig(bytes.NewReader([]byte(config)))
 	require.NoError(t, err)
 	require.Equal(t, "", h.forwardURL)
 	require.Equal(t, "^.*$", h.urlRe.String())
@@ -57,7 +57,7 @@ func TestHandlerSetConfig(t *testing.T) {
 func TestHandlerDeleteResponse(t *testing.T) {
 	h := &Handler{host: "localhost", port: 8080}
 	config := `{"host":"localhost","port":8080,"url-re":"^.*$","responses":[{"url":"/exists","code":200,"headers":{"Date":"Tue, 17 Oct 2023 13:13:20 GMT"},"response":[{"data":"response data"}]}]}`
-	require.NoError(t, h.parseConfig([]byte(config)))
+	require.NoError(t, h.parseConfig(bytes.NewReader([]byte(config))))
 	require.NoError(t, h.DeleteResponse("86CB8D0EA45696134985DD132F7C20D6D6356CD364D44AF7E8313FFF79702361"))
 	require.Empty(t, h.responses)
 }
@@ -65,19 +65,19 @@ func TestHandlerDeleteResponse(t *testing.T) {
 func TestHandlerUpdateResponse(t *testing.T) {
 	h := &Handler{host: "localhost", port: 8080}
 	config := `{"host":"localhost","port":8080,"url-re":"^.*$","responses":[{"url":"/exists","code":200,"headers":{"Date":"Tue, 17 Oct 2023 13:13:20 GMT"},"response":[{"data":"response data"}]}]}`
-	require.NoError(t, h.parseConfig([]byte(config)))
-	require.NoError(t, h.UpdateResponse([]byte(`{"id":"86CB8D0EA45696134985DD132F7C20D6D6356CD364D44AF7E8313FFF79702361","url":"/it/exists","code":200,"headers":{"Date":"Tue, 17 Oct 2023 13:13:20 GMT"},"response":[{"data":"response data"}]}`)))
+	require.NoError(t, h.parseConfig(bytes.NewReader([]byte(config))))
+	require.NoError(t, h.UpdateResponse(bytes.NewReader([]byte(`{"id":"86CB8D0EA45696134985DD132F7C20D6D6356CD364D44AF7E8313FFF79702361","url":"/it/exists","code":200,"headers":{"Date":"Tue, 17 Oct 2023 13:13:20 GMT"},"response":[{"data":"response data"}]}`))))
 	require.Len(t, h.responses, 1)
 	newKey := h.makeKey("/it/exists", "")
 	require.Equal(t, "/it/exists", h.responses[newKey].URL)
 	require.NotEqual(t, "86CB8D0EA45696134985DD132F7C20D6D6356CD364D44AF7E8313FFF79702361", h.responses[newKey].ID)
-	require.Error(t, h.UpdateResponse([]byte(`}`)))
+	require.Error(t, h.UpdateResponse(bytes.NewReader([]byte(`}`))))
 }
 func TestHandlerUpdateResponseError(t *testing.T) {
 	h := &Handler{host: "localhost", port: 8080}
 	config := `{"host":"localhost","port":8080,"url-re":"^.*$","responses":[{"url":"/exists","code":200,"headers":{"Date":"Tue, 17 Oct 2023 13:13:20 GMT"},"response":[{"data":"response data"}]}]}`
-	require.NoError(t, h.parseConfig([]byte(config)))
-	err := h.UpdateResponse([]byte(`{"url":"/exists","code":200,"headers":{"Date":"Tue, 17 Oct 2023 13:13:20 GMT"},"response":[{"data":"response data"}]}`))
+	require.NoError(t, h.parseConfig(bytes.NewReader([]byte(config))))
+	err := h.UpdateResponse(bytes.NewReader([]byte(`{"url":"/exists","code":200,"headers":{"Date":"Tue, 17 Oct 2023 13:13:20 GMT"},"response":[{"data":"response data"}]}`)))
 	require.EqualError(t, err, "update has key that overwrites other response")
 }
 
@@ -139,7 +139,7 @@ func TestHandler(t *testing.T) {
 		{
 			name:        "create error wrong cfg",
 			config:      `][]`, // wrong json
-			creationErr: "config parsing error: json parsing error: invalid character ']' looking for beginning of value",
+			creationErr: "config parsing error: json parsing error: readObjectStart: expect { or n, but found ], error found in #1 byte of ...|][]|..., bigger context ...|][]|...",
 		},
 		{
 			name:        "create error wrong port",
@@ -320,7 +320,7 @@ func TestHandler(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			h, err := NewHandler([]byte(tc.config))
+			h, err := NewHandler(bytes.NewReader([]byte(tc.config)))
 			if tc.creationErr != "" {
 				require.EqualError(t, err, tc.creationErr)
 				return
@@ -411,13 +411,13 @@ func readConfig(initPart []byte, rest chan []byte) (string, int) {
 }
 
 func TestHandlerDoubleStartStop(t *testing.T) {
-	h, err := NewHandler([]byte(`{"host": "localhost", "port": 8080, "url-re": "^/.*$"}`))
+	h, err := NewHandler(bytes.NewReader([]byte(`{"host": "localhost", "port": 8080, "url-re": "^/.*$"}`)))
 	require.NoError(t, err)
 	err = h.Start()
 	require.NoError(t, err)
 	err = h.Start()
 	require.Error(t, err)
-	h2, err := NewHandler([]byte(`{"host": "localhost", "port": 8080, "status": "active"}`))
+	h2, err := NewHandler(bytes.NewReader([]byte(`{"host": "localhost", "port": 8080, "status": "active"}`)))
 	require.Error(t, err)
 	require.Nil(t, h2)
 	err = h.Stop()
@@ -427,7 +427,7 @@ func TestHandlerDoubleStartStop(t *testing.T) {
 }
 
 func TestHandlerSequence(t *testing.T) {
-	h, err := NewHandler([]byte(`{"host": "localhost", "port": 8080, "url-re": "^/.*$"}`))
+	h, err := NewHandler(bytes.NewReader([]byte(`{"host": "localhost", "port": 8080, "url-re": "^/.*$"}`)))
 	require.NoError(t, err)
 	var extCalls int64
 	response := "response data"
@@ -459,7 +459,7 @@ func TestHandlerSequence(t *testing.T) {
 func TestLive(t *testing.T) {
 	t.Skip("live test") // require activated VPN
 	cfg := []byte(`{"id": "hub", "status": "active", "host": "localhost", "port": 8080, "forward-url": "http://udf-nyc.xstaging.tv/hub0"}`)
-	h, err := NewHandler(cfg)
+	h, err := NewHandler(bytes.NewReader(cfg))
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	defer h.Stop()
@@ -659,7 +659,7 @@ func checkCorrectJSONResponse(t *testing.T, url string) {
 }
 
 func TestBigChuncsConfig(t *testing.T) {
-	h, err := NewHandler([]byte(bigChunksConfig))
+	h, err := NewHandler(bytes.NewReader([]byte(bigChunksConfig)))
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	require.Len(t, h.responses, 1)
@@ -671,7 +671,7 @@ func TestBigChuncsConfig(t *testing.T) {
 }
 
 func TestBig2ChuncsConfig(t *testing.T) {
-	h, err := NewHandler([]byte(big2ChunksConfig))
+	h, err := NewHandler(bytes.NewReader([]byte(big2ChunksConfig)))
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	require.Len(t, h.responses, 2)
@@ -685,24 +685,24 @@ func TestBig2ChuncsConfig(t *testing.T) {
 }
 
 func TestRealBigDataFromConfig(t *testing.T) {
-	h, err := NewHandler([]byte(bigChunksConfig))
+	h, err := NewHandler(bytes.NewReader([]byte(bigChunksConfig)))
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	defer h.Stop()
 	checkCorrectJSONResponse(t, "http://localhost:8086/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
 	require.NoError(t, h.Stop())
-	require.NoError(t, h.SetConfig([]byte(bigChunksConfig)))
+	require.NoError(t, h.SetConfig(bytes.NewReader([]byte(bigChunksConfig))))
 	newCfg := strings.ReplaceAll(bigChunksConfig, `"port": 8086`, `"port": 8090`)
-	require.NoError(t, h.SetConfig([]byte(newCfg)))
+	require.NoError(t, h.SetConfig(bytes.NewReader([]byte(newCfg))))
 	checkCorrectJSONResponse(t, "http://localhost:8090/symbols?domain=tv&prefix=BINANCE&type=swap,futures,spot&fields=base-currency-id,currency-id,typespecs")
 }
 
 func TestRealBigDataFromExtSource(t *testing.T) {
-	h, err := NewHandler([]byte(bigChunksConfig))
+	h, err := NewHandler(bytes.NewReader([]byte(bigChunksConfig)))
 	require.NoError(t, err)
 	require.NotNil(t, h)
 	defer h.Stop()
-	h2, err := NewHandler([]byte(`{"id":"second", "status":"active", "port":8090, "forward-url": "http://localhost:8086" }`))
+	h2, err := NewHandler(bytes.NewReader([]byte(`{"id":"second", "status":"active", "port":8090, "forward-url": "http://localhost:8086" }`)))
 	require.NoError(t, err)
 	require.NotNil(t, h2)
 	defer h2.Stop()
@@ -749,4 +749,33 @@ func TestCompression(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, uncompressed)
 	require.Equal(t, bigChunksConfig, string(uncompressed))
+}
+
+func BenchmarkCopression(b *testing.B) {
+	for range b.N {
+		compressed, _ := compress([]byte(bigChunksConfig))
+		_, _ = decompress(compressed)
+	}
+}
+
+var (
+	data, _    = os.ReadFile("/home/dkulagin/Downloads/cmc.json")
+	jsStd      = json.NewDecoder(bytes.NewReader([]byte(data)))
+	destConfig = &Config{}
+)
+
+func BenchmarkLoadAndJsonDecode(b *testing.B) {
+	for range b.N {
+		data, err := os.Open("/home/dkulagin/Downloads/cmc.json")
+		require.NoError(b, err)
+		json.NewDecoder(data).Decode(destConfig)
+		data.Close()
+	}
+}
+func BenchmarkFullLoadAndJsonDecode(b *testing.B) {
+	for range b.N {
+		data, err := os.ReadFile("/home/dkulagin/Downloads/cmc.json")
+		require.NoError(b, err)
+		json.Unmarshal(data, destConfig)
+	}
 }

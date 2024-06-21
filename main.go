@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -99,16 +98,9 @@ func root(cmd *cobra.Command, _ []string) {
 }
 
 func handleCommands(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(err.Error()))
-		return
-	}
-	reqPath := r.Method + r.URL.Path
-	switch reqPath {
+	switch r.Method + r.URL.Path {
 	case "POST/new":
-		handler, err := NewHandler(body)
+		handler, err := NewHandler(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(err.Error()))
@@ -172,7 +164,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 	case "POST/config":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
-			err := h.SetConfig(body)
+			err := h.SetConfig(r.Body)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte(err.Error()))
@@ -231,7 +223,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 	case "POST/response":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
-			err = h.UpdateResponse(body)
+			err := h.UpdateResponse(r.Body)
 			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte(err.Error()))
@@ -246,7 +238,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			respID := r.URL.Query().Get("resp-id")
-			if err = h.DeleteResponse(respID); err != nil {
+			if err := h.DeleteResponse(respID); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte(err.Error()))
 			} else {
@@ -267,7 +259,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fmt.Sprintf("http-mock service v. %s", version)))
 	default:
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("wrong url: " + reqPath))
+		w.Write([]byte("wrong url: " + r.Method + r.URL.Path))
 	}
 }
 
@@ -309,7 +301,7 @@ func loadConfigs() {
 			continue
 		}
 		filePath := path.Join(dataDirName, file.Name())
-		cfg, err := os.ReadFile(filePath)
+		cfg, err := os.Open(filePath)
 		if err != nil {
 			logger.Error(mgm, "desc", fmt.Sprintf("reading config file %s error: %v", filePath, err))
 			continue
@@ -321,13 +313,14 @@ func loadConfigs() {
 				logger.Error(mgm, "handler", id, "desc", fmt.Sprintf("setting config from %s error: %v", filePath, err))
 			}
 			logger.Info(mgm, "handler", id, "desc", fmt.Sprintf("config set from %s", filePath))
-			continue
-		}
-		if handler, err := NewHandler(cfg); err != nil {
-			logger.Error(mgm, "desc", fmt.Sprintf("setting config from %s for new handler error: %v", filePath, err))
 		} else {
-			handlers[handler.id] = handler
-			id = handler.id
+			if handler, err := NewHandler(cfg); err != nil {
+				logger.Error(mgm, "desc", fmt.Sprintf("setting config from %s for new handler error: %v", filePath, err))
+			} else {
+				handler.id = id // the file name is used as ID to avid the misconfiguration with deferent ids and filenames
+				handlers[handler.id] = handler
+			}
 		}
+		cfg.Close()
 	}
 }

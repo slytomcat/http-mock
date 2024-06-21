@@ -145,7 +145,7 @@ func makeRe(re, defaultRe string) (*regexp.Regexp, error) {
 }
 
 // NewHandler returns new handler made by provided config
-func NewHandler(cfg []byte) (h *Handler, err error) {
+func NewHandler(cfg io.Reader) (h *Handler, err error) {
 	h = &Handler{}
 	err = h.parseConfig(cfg)
 	if err != nil {
@@ -186,9 +186,9 @@ func (h *Handler) GetStatus() *Status {
 	}
 }
 
-func (h *Handler) parseConfig(data []byte) error {
+func (h *Handler) parseConfig(data io.Reader) error {
 	cfg := &Config{}
-	if err := json.Unmarshal(data, cfg); err != nil {
+	if err := json.NewDecoder(data).Decode(cfg); err != nil {
 		return fmt.Errorf("json parsing error: %v", err)
 	}
 	if cfg.Port < 1000 {
@@ -402,7 +402,7 @@ func (h *Handler) Stop() error {
 }
 
 // SetConfig sets the handler config and restart handler in case of host/port change
-func (h *Handler) SetConfig(cfg []byte) error {
+func (h *Handler) SetConfig(cfg io.Reader) error {
 	h.lock.Lock()
 	pHost := h.host
 	pPort := h.port
@@ -428,9 +428,10 @@ func (h *Handler) SetConfig(cfg []byte) error {
 }
 
 // UpdateResponse updates single response.
-func (h *Handler) UpdateResponse(update []byte) error {
+func (h *Handler) UpdateResponse(update io.Reader) error {
 	resp := &Response{}
-	if err := json.Unmarshal(update, resp); err != nil {
+
+	if err := json.NewDecoder(update).Decode(resp); err != nil {
 		return fmt.Errorf("parsing update error: %v", err)
 	}
 	if resp.ID != "" {
@@ -460,7 +461,7 @@ func (h *Handler) parseKey(sKey string) (*[32]byte, error) {
 	if len(sKey) != 64 {
 		return nil, fmt.Errorf("update contain ID with wrong length")
 	}
-	key := make([]byte, 32, 32)
+	key := make([]byte, 32)
 	_, err := hex.Decode(key, []byte(sKey))
 	if err != nil {
 		return nil, fmt.Errorf("parsing update.ID error: %v", err)
@@ -565,7 +566,7 @@ func (h *Handler) reportRequest(req, mode, body string, key [32]byte) {
 }
 
 func (h *Handler) sendSimpleResponse(response Response, w http.ResponseWriter) {
-	body := []byte{}
+	var body []byte
 	var c Chunk
 	if len(response.Response) > 0 {
 		c = response.Response[0]
@@ -626,6 +627,8 @@ func (h *Handler) handleForward(passthrough bool, r *http.Request, url string, h
 		logger.Debug(h.id, "desc", "not chunked")
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 		if resp.Uncompressed && supportCompression {
 			headers["Content-Encoding"] = "gzip"

@@ -26,6 +26,7 @@ func cleanUp() func() {
 	storedCmdHost := cmdHost
 	storedCmdPort := cmdPort
 	storedHandlers := handlers
+	_ = os.RemoveAll(dataDirName)
 	return func() {
 		dataDirName = storedDataDirName
 		cmdHost = storedCmdHost
@@ -70,6 +71,7 @@ func killIt(delay time.Duration) {
 }
 
 func TestMainByEnv(t *testing.T) {
+	defer cleanUp()()
 	host := "localhost"
 	port := 8099
 	data := "_STORAGE"
@@ -89,6 +91,7 @@ func TestMainByEnv(t *testing.T) {
 }
 
 func TestMainByEnvFail(t *testing.T) {
+	defer cleanUp()()
 	host := "localhost"
 	port := "bad_number"
 	data := "_STORAGE"
@@ -108,6 +111,7 @@ func TestMainByEnvFail(t *testing.T) {
 }
 
 func TestService(t *testing.T) {
+	defer cleanUp()()
 	msg := make(chan string, 1)
 	go func() {
 		msg <- execute("")
@@ -140,6 +144,10 @@ func TestService(t *testing.T) {
 	require.Equal(t, `{"id":"test","status":"inactive"}`, string(body))
 	data := struct{ ID string }{}
 	err = json.Unmarshal(body, &data)
+	status, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/config?id=%s", data.ID), nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "{\"ID\":\"test\",\"status\":\"inactive\",\"port\":8090,\"passthrough-re\":\"^$\",\"url-re\":\"^.*$\",\"url-ex-re\":\"^$\",\"body-re\":\"^.*$\",\"body-ex-re\":\"^$\",\"responses\":[{\"id\":\"766C4650CB3E23432941DDCD3D663883BA3AF05C5DA44D79074657EB776B99C3\",\"url\":\"/url\",\"code\":200,\"response\":[{\"data\":\"ok\"}]}]}", string(body))
 	require.NoError(t, err)
 	require.Equal(t, "test", data.ID)
 	status, body, err = executeRequest(http.MethodGet, fmt.Sprintf("http://localhost:8080/start?id=%s", data.ID), nil)
@@ -313,8 +321,7 @@ func copyFolder(srcDir, dstDir string) error {
 			return err
 		}
 		destination := path.Join(dstDir, file.Name())
-		err = os.WriteFile(destination, data, 0664)
-		if err != nil {
+		if err = os.WriteFile(destination, data, 0664); err != nil {
 			return err
 		}
 	}
@@ -322,6 +329,7 @@ func copyFolder(srcDir, dstDir string) error {
 }
 
 func TestProxiesChain(t *testing.T) {
+	defer cleanUp()()
 	testStorageFolder := t.TempDir()
 	testDataSourceFolder := "proxiesCainTestData"
 	require.NoError(t, copyFolder(testDataSourceFolder, testStorageFolder))
@@ -343,7 +351,16 @@ func TestProxiesChain(t *testing.T) {
 	source, err := io.ReadAll(sourceResp.Body)
 	require.NoError(t, err)
 	require.Equal(t, source, data)
-	killIt(500 * time.Millisecond)
-	time.Sleep(600 * time.Millisecond)
+	killIt(time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	require.Never(t, checkMgmPortStatus, 1*time.Second, 100*time.Millisecond)
+}
+
+func TestConfigDumpError(t *testing.T) {
+	defer cleanUp()()
+	logger.Handler()
+	dataDirName = "/dev/no_access/folder"
+	killIt(100 * time.Millisecond)
+	msg := execute("")
+	require.Equal(t, "", msg)
 }

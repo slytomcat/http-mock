@@ -44,7 +44,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&cmdHost, "host", "s", "localhost", "host to start service")
 	rootCmd.Flags().IntVarP(&cmdPort, "port", "p", defaultCmdPort, "port to start service")
 	rootCmd.Flags().StringVarP(&dataDirName, "data", "d", "_storage", "path for configs storage")
-	rootCmd.Flags().StringVarP(&logLevel, "log", "l", "info", "logging level, one of 'error', 'warn', 'info' or 'debug', default: 'info'")
+	rootCmd.Flags().StringVarP(&logLevel, "log", "l", "info", "logging level, one of 'error', 'warn', 'info' or 'debug'")
 }
 
 func initLogging() {
@@ -92,7 +92,7 @@ func root(cmd *cobra.Command, _ []string) {
 	if err != nil {
 		logger.Error(mgm, "desc", err)
 	}
-	dumpConfigs()
+	dumpConfigs("exit")
 	for _, h := range handlers {
 		h.Stop()
 	}
@@ -101,8 +101,7 @@ func root(cmd *cobra.Command, _ []string) {
 func handleCommands(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(err.Error()))
+		sendResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	reqPath := r.Method + r.URL.Path
@@ -110,33 +109,28 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 	case "POST/new":
 		handler, err := NewHandler(body)
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(err.Error()))
+			sendResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		handlers[handler.id] = handler
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(handler.String()))
+		sendResponse(w, http.StatusOK, handler.String())
 	case "GET/list":
-		w.WriteHeader(http.StatusOK)
 		list := make([]*Status, 0, len(handlers))
 		for _, h := range handlers {
 			list = append(list, h.GetStatus())
 		}
 		resp, _ := json.Marshal(list)
-		w.Write(resp)
+		sendResponse(w, http.StatusOK, string(resp))
 	case "GET/start":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if err := h.Start(); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(err.Error()))
+				sendResponse(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "GET/config":
 		id := r.URL.Query().Get("id")
@@ -146,71 +140,62 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 				for range rest {
 				} // drain rest
 			}()
-			noRest := true
+			restExists := false
 			part := []byte{}
 			select {
-			case part = <-rest:
+			case part, restExists = <-rest:
 			default:
-				noRest = false
-			}
-			if noRest {
-				w.WriteHeader(http.StatusOK)
-				w.Write(init)
+				restExists = true
+			} // restExists became false only in case of closed channel rest
+			if !restExists {
+				sendResponse(w, http.StatusOK, string(init))
 				return
 			}
 			w.Header().Set("Transfer-Encoding", "chunked")
-			w.WriteHeader(http.StatusOK)
-			w.Write(init)
+			sendResponse(w, http.StatusOK, string(init))
 			w.Write(part)
 			for part = range rest {
 				w.Write(part)
 			}
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "POST/config":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			err := h.SetConfig(body)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte(err.Error()))
+				sendResponse(w, http.StatusBadRequest, err.Error())
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "DELETE/config":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if h.status == "active" {
 				if err := h.Stop(); err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					w.Write([]byte(err.Error()))
+					sendResponse(w, http.StatusInternalServerError, err.Error())
 					return
 				}
 			}
 			delete(handlers, id)
 			w.WriteHeader(http.StatusOK)
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "GET/stop":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			if err := h.Stop(); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(err.Error()))
+				sendResponse(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "GET/response":
 		id := r.URL.Query().Get("id")
@@ -218,61 +203,60 @@ func handleCommands(w http.ResponseWriter, r *http.Request) {
 			respID := r.URL.Query().Get("resp-id")
 			data, err := h.GetResponse(respID)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte(err.Error()))
+				sendResponse(w, http.StatusBadRequest, err.Error())
 			} else {
-				w.WriteHeader(http.StatusOK)
-				w.Write(data)
+				sendResponse(w, http.StatusOK, string(data))
 			}
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "POST/response":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			err = h.UpdateResponse(body)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte(err.Error()))
+				sendResponse(w, http.StatusBadRequest, err.Error())
 			} else {
 				w.WriteHeader(http.StatusOK)
 			}
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "DELETE/response":
 		id := r.URL.Query().Get("id")
 		if h, ok := handlers[id]; ok {
 			respID := r.URL.Query().Get("resp-id")
 			if err = h.DeleteResponse(respID); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte(err.Error()))
+				sendResponse(w, http.StatusBadRequest, err.Error())
 			} else {
 				w.WriteHeader(http.StatusOK)
 			}
 		} else {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("no handler found for id '%s'", id)))
+			sendResponse(w, http.StatusNotFound, fmt.Sprintf("no handler found for id '%s'", id))
 		}
 	case "GET/dump-configs":
-		dumpConfigs()
+		dumpConfigs("dump-configs")
 		w.WriteHeader(http.StatusOK)
 	case "GET/load-configs":
 		loadConfigs()
 		w.WriteHeader(http.StatusOK)
 	case "GET/":
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf("http-mock service v. %s", version)))
+		sendResponse(w, http.StatusOK, fmt.Sprintf("http-mock service v. %s", version))
 	default:
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("wrong url: " + reqPath))
+		sendResponse(w, http.StatusNotFound, "wrong url: "+reqPath)
 	}
 }
 
-func dumpConfigs() {
-	_ = os.MkdirAll(dataDirName, 01775)
+func sendResponse(w http.ResponseWriter, code int, message string) {
+	w.WriteHeader(code)
+	w.Write([]byte(message))
+}
+
+func dumpConfigs(where string) {
+	if err := os.MkdirAll(dataDirName, 01775); err != nil {
+		logger.Error(mgm, "config", where, "desc", err)
+		return
+	}
 	for _, h := range handlers {
 		file, err := os.OpenFile(fmt.Sprintf("%s/%s.json", dataDirName, h.id), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0664)
 		if err != nil {

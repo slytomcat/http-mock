@@ -18,7 +18,7 @@ func TestMockWriter(t *testing.T) {
 		<-m.Written
 	}
 	require.Len(t, m.Written, 0)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		n, err := m.Write(messages[i])
 		assert.NoError(t, err)
 		assert.Equal(t, 2, n)

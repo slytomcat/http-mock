@@ -445,7 +445,7 @@ func TestHandlerSequence(t *testing.T) {
 	time.Sleep(30 * time.Microsecond) // wait for servers start
 	req, err := http.NewRequest(http.MethodGet, "http://localhost:8080/some", nil)
 	require.NoError(t, err)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		resp, err := client.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()

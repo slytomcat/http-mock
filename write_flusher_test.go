@@ -18,14 +18,14 @@ func TestCachedWritCloser(t *testing.T) {
 	wc := NewCachedWriteFlusher(mock, "", mock.Flush, flushInterval)
 	length := len(messages)
 	// slow
-	for i := 0; i < length; i++ {
+	for i := range length {
 		time.Sleep(flushInterval)
 		n, err := wc.Write(messages[i])
 		assert.NoError(t, err, i)
 		assert.Equal(t, 2, n, i)
 	}
 	// fast
-	for i := 0; i < length; i++ {
+	for i := range length {
 		n, err := wc.Write(messages[i])
 		assert.NoError(t, err, i)
 		assert.Equal(t, 2, n, i)
